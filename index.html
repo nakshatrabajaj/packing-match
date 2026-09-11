@@ -87,7 +87,7 @@
         <h2>Results</h2>
         <div id="summary"></div>
         <div id="downloads" style="margin-top:12px"></div>
-        <div class="hint">If the browser asks to allow multiple downloads, click Allow. The files are also available from the buttons above. Output files are saved to your Downloads folder.</div>
+        <div class="hint">Click each button to save that file. Files go to your Downloads folder.</div>
         <div id="flags"></div>
       </div>
     </div>
@@ -314,7 +314,6 @@ async function run() {
     const text = toCSV(r.rows); window.lastOutputs[r.label.toLowerCase()] = text;
     const b = document.createElement("button"); b.className = "dl"; b.textContent = "Download " + r.file; b.onclick = () => download(r.file, text);
     $("downloads").appendChild(b);
-    download(r.file, text);
   }
   const allFlags = results.flatMap(r => r.flags.map(f => ({ ...f, kind: r.label })));
   $("flags").innerHTML = allFlags.length
@@ -322,7 +321,7 @@ async function run() {
       + allFlags.map(f => "<tr><td>" + f.kind + "</td><td>" + f.batch + "</td><td>" + f.brand + "</td><td>" + f.issued + "</td><td>" + f.note + "</td></tr>").join("") + "</table></div>"
     : "";
   $("results").hidden = false;
-  $("status").textContent = "Done. " + results.map(r => r.label + " " + r.stats.match + " of " + r.total).join(", ") + ". Files downloaded.";
+  $("status").textContent = "Done. " + results.map(r => r.label + " " + r.stats.match + " of " + r.total).join(", ") + ". Use the Download buttons below to save the files.";
   $("runBtn").disabled = false;
 }
 $("runBtn").addEventListener("click", run);
