@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Packing Match</title>
+<style>
+  :root { --ink:#1c1c1c; --muted:#666; --line:#d9d9d9; --ok:#1d7a3a; --warn:#b3540a; --bad:#b32020; --bg:#f6f6f4; --card:#fff; --accent:#1c4e80; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width:980px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin-bottom:16px; }
+  .step { display:flex; gap:14px; align-items:flex-start; }
+  .num { flex:0 0 30px; height:30px; border-radius:50%; background:var(--accent); color:#fff; font-weight:700; display:flex; align-items:center; justify-content:center; }
+  .step h2 { font-size:17px; margin:2px 0 8px; }
+  .drop { border:2px dashed #9db3cc; border-radius:10px; padding:26px; text-align:center; background:#f3f7fb; cursor:pointer; }
+  .drop.over { background:#e3edf8; border-color:var(--accent); }
+  .drop input { display:none; }
+  .files { margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .slot { border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:#fafafa; }
+  .slot b { display:block; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .slot .name { font-weight:600; }
+  .slot .meta { color:var(--muted); font-size:13px; }
+  .slot.ok { border-color:#bfe0c8; background:#f1faf3; }
+  .slot.missing .name { color:var(--muted); font-weight:400; }
+  button.run { font:inherit; font-size:17px; font-weight:700; padding:12px 26px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.run:disabled { background:#9aa9b8; cursor:not-allowed; }
+  button.dl { font:inherit; font-size:15px; font-weight:600; padding:9px 16px; border:1px solid var(--accent); border-radius:8px; background:#fff; color:var(--accent); cursor:pointer; margin-right:10px; margin-top:6px; }
+  .status { margin-top:12px; color:var(--muted); }
+  .status .err { color:var(--bad); font-weight:600; }
+  table { border-collapse:collapse; width:100%; margin-top:10px; }
+  th, td { border-bottom:1px solid var(--line); padding:7px 9px; text-align:left; font-size:14px; }
+  th { background:#f1f1ee; font-weight:600; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  .big { font-size:26px; font-weight:700; color:var(--ok); }
+  .flags { max-height:320px; overflow:auto; }
+  .hint { font-size:13px; color:var(--muted); margin-top:8px; }
+  .sheets { font-size:13px; color:var(--muted); margin-top:6px; }
+  .sheets span { display:inline-block; margin-right:14px; }
+  .sheets .good { color:var(--ok); }
+  .sheets .fail { color:var(--bad); font-weight:600; }
+  code { background:#eee; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Packing Match</h1>
+  <p class="sub">Matches the FMS packing pendency against the PM for Production sheets and gives you the batches whose carton is sent, foil is issued, and no foil has been returned.</p>
+
+  <div class="card">
+    <div class="step">
+      <div class="num">1</div>
+      <div style="flex:1">
+        <h2>Add the two pendency files exported from FMS</h2>
+        <label class="drop" id="drop">
+          <input type="file" id="fileInput" accept=".csv,text/csv" multiple>
+          <div><b>Click here</b> or drag the files in. You can add both files at once, or one at a time.</div>
+          <div class="hint">Tablet file: Primary Packing pendency (has a “Batch #” column). Capsule file: Capsule Packing pendency (has a “Batch” column). Order does not matter, the tool works out which is which.</div>
+        </label>
+        <div class="files">
+          <div class="slot missing" id="slotT"><b>Tablet file</b><span class="name">not added yet</span><div class="meta"></div></div>
+          <div class="slot missing" id="slotC"><b>Capsule file</b><span class="name">not added yet</span><div class="meta"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">
+      <div class="num">2</div>
+      <div style="flex:1">
+        <h2>Run</h2>
+        <button class="run" id="runBtn" disabled>Run match</button>
+        <div class="status" id="status">Add at least one file to enable Run.</div>
+        <div class="sheets" id="sheetcfg"></div>
+        <div class="sheets" id="sheets"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="results" hidden>
+    <div class="step">
+      <div class="num">3</div>
+      <div style="flex:1">
+        <h2>Results</h2>
+        <div id="summary"></div>
+        <div id="downloads" style="margin-top:12px"></div>
+        <div class="hint">If the browser asks to allow multiple downloads, click Allow. The files are also available from the buttons above. Output files are saved to your Downloads folder.</div>
+        <div id="flags"></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="hint">Rules: exact batch number match. Carton Sent (column I) must be ticked or have a quantity; the word “Pend” does not count. Foil Qty Issued must be filled. Foil Qty Returned must be blank on every row for that batch; a typed 0 counts as filled. Tablets are checked on the TABLET and Beta Lectum tabs, capsules on the CAPSULE tabs, of both PM sheets.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// ---------- CONFIGURATION ----------
+// The PM for Production sheet IDs are NOT stored in this page. They come from the address bar, after the #:
+//   https://.../packing-match/#sheets=older:SHEET_ID_1,newer:SHEET_ID_2
+// Each entry is  label:sheetId  (label is optional). Bookmark the full address once and it just works.
+function readSheetsFromHash() {
+  const m = decodeURIComponent(location.hash || "").match(/sheets=([^&]+)/);
+  if (!m) return [];
+  return m[1].split(",").map(s => s.trim()).filter(Boolean).map(s => {
+    const i = s.indexOf(":");
+    return i > 0 ? { key: s.slice(0, i), id: s.slice(i + 1) } : { key: s.slice(0, 5), id: s };
+  });
+}
+let SHEETS = readSheetsFromHash();
+const TABLET_TABS  = ["TABLET", "Beta Lectum"];
+const CAPSULE_TABS = ["CAPSULE"];
+const BATCH_RE = /^[A-Z]26[A-Z]\d{3}[A-Z]?$/;
+const APPENDED = ["Sheet Carton Nos","Sheet Col I (Carton Sent)","Sheet Col P (Foil Qty Issued)","Sheet Foil Qty Returned","Matched From","Check"];
+
+// ---------- helpers ----------
+const nb   = v => v !== null && v !== undefined && v !== "";
+const tick = v => nb(v) && String(v).trim().toLowerCase() !== "pend";
+const fmt  = v => (v === null || v === undefined) ? "" : String(v);
+const isNum = v => typeof v === "number";
+
+function parseCSV(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = []; let row = [], field = "", i = 0, q = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i+1] === '"') { field += '"'; i += 2; continue; } q = false; i++; continue; }
+      field += c; i++; continue;
+    }
+    if (c === '"') { q = true; i++; continue; }
+    if (c === ',') { row.push(field); field = ""; i++; continue; }
+    if (c === '\r') { i++; continue; }
+    if (c === '\n') { row.push(field); rows.push(row); row = []; field = ""; i++; continue; }
+    field += c; i++;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(v => v !== ""));
+}
+function csvField(v) {
+  v = v == null ? "" : String(v);
+  return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+function toCSV(rows) { return "﻿" + rows.map(r => r.map(csvField).join(",")).join("\r\n") + "\r\n"; }
+
+// ---------- Google Sheets loading ----------
+// Downloads each PM sheet as an Excel workbook (the same export used for the manual runs) and reads it
+// with SheetJS. Works for link-shared sheets without any login. Text such as "RESO-1170" in the
+// quantity column is kept as-is, which the lighter gviz reader would drop.
+const wbCache = new Map();
+async function loadWorkbook(sheet) {
+  if (wbCache.has(sheet.id)) return wbCache.get(sheet.id);
+  const url = "https://docs.google.com/spreadsheets/d/" + sheet.id + "/export?format=xlsx&_=" + Date.now();
+  const resp = await fetch(url, { cache: "no-store" });
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const buf = await resp.arrayBuffer();
+  if (typeof XLSX === "undefined") throw new Error("SheetJS library did not load (internet blocked?)");
+  const wb = XLSX.read(buf, { type: "array", cellDates: false });
+  wbCache.set(sheet.id, wb);
+  return wb;
+}
+// Row 3 of every tab is the header row: "Batch #", "CATON NOS", the carton-sent column (I, headed "QTY" or
+// "Status"), "Qty Issued" and "Qty Returned" (foil). Columns are located by header text, so the tabs with and
+// without the "Verified By" block both work.
+function indexTab(wb, tab, label) {
+  const ws = wb.Sheets[tab];
+  if (!ws) throw new Error('tab "' + tab + '" not found');
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: false });
+  const hdr = (rows[2] || []).map(v => fmt(v).trim());
+  const bc = hdr.indexOf("Batch #"), cc = hdr.indexOf("CATON NOS"), pc = hdr.indexOf("Qty Issued");
+  const ic = 8;
+  if (bc < 0 || pc < 0 || hdr[pc + 1] !== "Qty Returned" || !["QTY", "Status"].includes(hdr[ic]))
+    throw new Error('header row of "' + tab + '" is not in the expected layout');
+  const map = new Map(); let n = 0;
+  for (let k = 3; k < rows.length; k++) {
+    const r = rows[k]; const b = fmt(r[bc]).trim();
+    if (!BATCH_RE.test(b)) continue;
+    n++;
+    if (!map.has(b)) map.set(b, []);
+    map.get(b).push({ src: label, brand: r[1], carton: r[cc], I: r[ic], P: r[pc], R: r[pc + 1] });
+  }
+  return { map, n };
+}
+
+// ---------- matching (identical to the Python run) ----------
+function match(hdr, rows, batchCol, sources) {
+  const bi = hdr.indexOf(batchCol), bri = hdr.indexOf("Brand Name");
+  const out = [], stats = { match:0, returned:0, notMet:0, notOnSheet:0 }, flags = [];
+  for (const r of rows) {
+    const b = (r[bi] || "").trim();
+    const cands = sources.flatMap(s => s.map.get(b) || []);
+    if (!cands.length) { stats.notOnSheet++; continue; }
+    const hits = cands.filter(c => tick(c.I) && nb(c.P));
+    if (!hits.length) { stats.notMet++; continue; }
+    if (hits.some(c => nb(c.R))) { stats.returned++; continue; }
+    stats.match++;
+    const uniq = a => [...new Set(a)];
+    const Is = uniq(hits.map(h => fmt(h.I))).join(" | ");
+    const Ps = uniq(hits.map(h => fmt(h.P))).join(" | ");
+    const src = uniq(hits.map(h => h.src)).join(" + ");
+    const fl = [];
+    if (uniq(hits.map(h => fmt(h.P))).length > 1) fl.push("multiple foil issues");
+    if (hits.some(h => !isNum(h.P))) fl.push("text in qty issued");
+    const brandCsv = (r[bri] || "").trim().toUpperCase().slice(0, 4), brandSheet = fmt(hits[0].brand).trim().toUpperCase().slice(0, 4);
+    if (brandCsv !== brandSheet) fl.push("sheet brand = " + fmt(hits[0].brand));
+    if (fl.length) flags.push({ batch: b, brand: (r[bri] || "").trim(), issued: Ps, note: fl.join("; ") });
+    out.push(r.concat([uniq(hits.map(h => fmt(h.carton))).join(" | "), Is, Ps, "", src, fl.join("; ")]));
+  }
+  return { rows: [hdr.concat(APPENDED)].concat(out), stats, flags };
+}
+
+// ---------- UI ----------
+const files = { tablet: null, capsule: null };
+const $ = id => document.getElementById(id);
+function detect(name, text) {
+  const rows = parseCSV(text); if (!rows.length) return null;
+  const hdr = rows[0].map(h => h.trim());
+  if (hdr.includes("Batch #")) return { kind: "tablet", hdr, rows: rows.slice(1), name, batchCol: "Batch #" };
+  if (hdr.includes("Batch")) return { kind: "capsule", hdr, rows: rows.slice(1), name, batchCol: "Batch" };
+  return null;
+}
+function showSlots() {
+  for (const [k, id, lbl] of [["tablet","slotT","Tablet file"],["capsule","slotC","Capsule file"]]) {
+    const f = files[k], el = $(id);
+    el.className = "slot " + (f ? "ok" : "missing");
+    el.querySelector(".name").textContent = f ? f.name : "not added yet";
+    el.querySelector(".meta").textContent = f ? f.rows.length + " pending batches" : "";
+  }
+  $("runBtn").disabled = !(files.tablet || files.capsule) || !SHEETS.length;
+  $("status").textContent = !SHEETS.length ? "" : (files.tablet || files.capsule) ? "Ready. Click Run match." : "Add at least one file to enable Run.";
+  showSheetConfig();
+}
+function showSheetConfig() {
+  const el = $("sheetcfg");
+  if (SHEETS.length) { el.innerHTML = "PM sheets in use: " + SHEETS.map(s => "<code>" + s.key + "</code>").join(", ") + " (from the bookmark address)"; return; }
+  el.innerHTML = '<span class="err">No PM sheet links found in the address. Open the tool from the bookmark you were given, or paste the sheet links below and press Use.</span>'
+    + '<div style="margin-top:8px"><input id="cfgIn" style="width:70%;font:inherit;padding:6px" placeholder="paste 1 or 2 Google Sheet links, separated by a comma"> <button class="dl" id="cfgBtn">Use</button></div>';
+  $("cfgBtn").onclick = () => {
+    const ids = ($("cfgIn").value.match(/[-\w]{25,}/g) || []);
+    if (!ids.length) return;
+    location.hash = "sheets=" + ids.map(id => id.slice(0, 5) + ":" + id).join(",");
+    SHEETS = readSheetsFromHash(); showSlots();
+  };
+}
+async function addFiles(list) {
+  for (const file of list) {
+    const text = await file.text();
+    const d = detect(file.name, text);
+    if (!d) { $("status").innerHTML = '<span class="err">' + file.name + ' is not a pendency CSV (no “Batch #” or “Batch” column). Skipped.</span>'; continue; }
+    files[d.kind] = d;
+  }
+  showSlots();
+}
+$("fileInput").addEventListener("change", e => addFiles(e.target.files));
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
+
+function stamp() { const d = new Date(), p = n => String(n).padStart(2, "0"); return p(d.getDate()) + "-" + p(d.getMonth()+1) + "-" + d.getFullYear(); }
+function download(name, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+  a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+window.lastOutputs = {};
+
+async function run() {
+  $("runBtn").disabled = true; $("results").hidden = true;
+  $("status").textContent = "Reading the PM for Production sheets…"; $("sheets").innerHTML = "";
+  wbCache.clear();
+  const need = [];
+  if (files.tablet)  for (const s of SHEETS) for (const t of TABLET_TABS)  need.push({ s, t, kind: "tablet" });
+  if (files.capsule) for (const s of SHEETS) for (const t of CAPSULE_TABS) need.push({ s, t, kind: "capsule" });
+  const wbs = {};
+  await Promise.all(SHEETS.map(async s => { try { wbs[s.id] = await loadWorkbook(s); } catch (e) { wbs[s.id] = e; } }));
+  const loaded = need.map(n => {
+    const wb = wbs[n.s.id];
+    if (wb instanceof Error) return { ...n, ok: false, err: wb.message };
+    try { return { ...n, ix: indexTab(wb, n.t, n.s.key + "/" + n.t), ok: true }; }
+    catch (e) { return { ...n, ok: false, err: e.message }; }
+  });
+  $("sheets").innerHTML = loaded.map(l => '<span class="' + (l.ok ? "good" : "fail") + '">' + l.s.key + " / " + l.t + ": " + (l.ok ? l.ix.n + " rows" : "FAILED (" + l.err + ")") + "</span>").join("");
+  const failed = loaded.filter(l => !l.ok);
+  if (failed.length) { $("status").innerHTML = '<span class="err">Could not read ' + failed.length + ' sheet tab(s). Check the internet connection and that the sheets are still shared, then run again.</span>'; $("runBtn").disabled = false; return; }
+
+  const day = stamp(), results = [];
+  if (files.tablet) {
+    const r = match(files.tablet.hdr, files.tablet.rows, "Batch #", loaded.filter(l => l.kind === "tablet").map(l => l.ix));
+    results.push({ label: "Tablet", file: "TABLET - Packing match " + day + ".csv", total: files.tablet.rows.length, ...r });
+  }
+  if (files.capsule) {
+    const r = match(files.capsule.hdr, files.capsule.rows, "Batch", loaded.filter(l => l.kind === "capsule").map(l => l.ix));
+    results.push({ label: "Capsule", file: "CAPSULE - Packing match " + day + ".csv", total: files.capsule.rows.length, ...r });
+  }
+
+  let html = "<table><tr><th></th>" + results.map(r => "<th>" + r.label + "</th>").join("") + "</tr>";
+  const line = (lbl, f, cls) => "<tr><td>" + lbl + "</td>" + results.map(r => '<td class="n ' + (cls||"") + '">' + f(r) + "</td>").join("") + "</tr>";
+  html += line("Pending batches in file", r => r.total);
+  html += line("<b>Matched</b>", r => r.stats.match, "big");
+  html += line("Dropped: foil qty returned is filled", r => r.stats.returned);
+  html += line("On sheet, but carton or foil condition not met", r => r.stats.notMet);
+  html += line("Not on any sheet tab", r => r.stats.notOnSheet);
+  html += "</table>";
+  $("summary").innerHTML = html;
+
+  $("downloads").innerHTML = "";
+  window.lastOutputs = {};
+  for (const r of results) {
+    const text = toCSV(r.rows); window.lastOutputs[r.label.toLowerCase()] = text;
+    const b = document.createElement("button"); b.className = "dl"; b.textContent = "Download " + r.file; b.onclick = () => download(r.file, text);
+    $("downloads").appendChild(b);
+    download(r.file, text);
+  }
+  const allFlags = results.flatMap(r => r.flags.map(f => ({ ...f, kind: r.label })));
+  $("flags").innerHTML = allFlags.length
+    ? '<h3 style="margin:18px 0 4px;font-size:15px">Rows worth a look (' + allFlags.length + ') — these are included in the output with a note in the Check column</h3><div class="flags"><table><tr><th>Type</th><th>Batch</th><th>Brand</th><th>Foil issued</th><th>Note</th></tr>'
+      + allFlags.map(f => "<tr><td>" + f.kind + "</td><td>" + f.batch + "</td><td>" + f.brand + "</td><td>" + f.issued + "</td><td>" + f.note + "</td></tr>").join("") + "</table></div>"
+    : "";
+  $("results").hidden = false;
+  $("status").textContent = "Done. " + results.map(r => r.label + " " + r.stats.match + " of " + r.total).join(", ") + ". Files downloaded.";
+  $("runBtn").disabled = false;
+}
+$("runBtn").addEventListener("click", run);
+// Self-test: open the file with ?selftest to check that both PM sheets can be read from this computer.
+if (location.search.includes("selftest")) (async () => {
+  const bits = [];
+  for (const s of SHEETS) { try { const wb = await loadWorkbook(s); bits.push(s.key + " OK tabs=" + wb.SheetNames.length + " TABLET=" + indexTab(wb, "TABLET", "x").n + " CAPSULE=" + indexTab(wb, "CAPSULE", "x").n + " Beta=" + indexTab(wb, "Beta Lectum", "x").n); } catch (e) { bits.push(s.key + " FAIL " + e.message); } }
+  $("status").textContent = "SELFTEST origin=" + location.origin + " | " + bits.join(" | ");
+})();
+window.addEventListener("hashchange", () => { SHEETS = readSheetsFromHash(); showSlots(); });
+showSlots();
+// For automated testing: window.runWithText(tabletCsvText, capsuleCsvText)
+window.runWithText = async (t, c) => { files.tablet = t ? detect("tablet.csv", t) : null; files.capsule = c ? detect("capsule.csv", c) : null; showSlots(); await run(); return Object.fromEntries(Object.entries(window.lastOutputs).map(([k, v]) => [k, v.length])); };
+</script>
+</body>
+</html>
