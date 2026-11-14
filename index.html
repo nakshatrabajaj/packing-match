@@ -52,6 +52,9 @@
   details { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:#fafafa; }
   details summary { cursor:pointer; font-weight:600; }
   tr.co td { border-top:2px solid var(--warn); }
+  h3.sech { font-size:16px; margin:22px 0 6px; padding-top:14px; border-top:1px solid var(--line); }
+  details.setupBox { background:#fff; }
+  details.setupBox table.setup { margin-top:6px; }
 </style>
 </head>
 <body>
@@ -107,15 +110,15 @@
     <div class="step">
       <div class="num">4</div>
       <div style="flex:1">
-        <h2>ALU-ALU machine plan</h2>
-        <p class="hint" style="margin-top:0">Allots the matched ALU-ALU batches to ALU 1 to ALU 7 by change part, so each machine changes over as little as possible. Blister and strip are not planned yet.</p>
+        <h2>Machine plan</h2>
+        <p class="hint" style="margin-top:0">Allots the matched batches to the ALU-ALU, Blister and Strip machines by change part, so each machine changes over as little as possible.</p>
         <div id="machineSetup"></div>
         <div id="planOut" style="margin-top:14px"></div>
       </div>
     </div>
   </div>
 
-  <p class="hint">Rules: exact batch number match. Carton Sent (column I) must be ticked or have a quantity; the word “Pend” does not count. Foil Qty Issued must be filled. Foil Qty Returned must be blank on every row for that batch; a typed 0 counts as filled. Tablets are checked on the TABLET and Beta Lectum tabs, capsules on the CAPSULE tabs, of the PM sheets named in the bookmark. Machine plan: ALU-ALU only, by foil size and tablet or capsule size; 185MM, 90MM and 210MM in FMS are treated as the 190MM, 92MM and 214MM change parts; load is counted in tablets or capsules.</p>
+  <p class="hint">Rules: exact batch number match. Carton Sent (column I) must be ticked or have a quantity; the word “Pend” does not count. Foil Qty Issued must be filled. Foil Qty Returned must be blank on every row for that batch; a typed 0 counts as filled. Tablets are checked on the TABLET and Beta Lectum tabs, capsules on the CAPSULE tabs, of the PM sheets named in the bookmark. Machine plan: change part is chosen by foil size and tablet or capsule size; LD foil means strip; 185MM, 90MM and 210MM in FMS are treated as the 190MM, 92MM and 214MM change parts; load is counted in tablets or capsules.</p>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -357,9 +360,9 @@ if (location.search.includes("selftest")) (async () => {
 window.addEventListener("hashchange", () => { SHEETS = readSheetsFromHash(); showSlots(); });
 showSlots();
 // =====================================================================================
-// ALU-ALU MACHINE PLAN
-// Allots the matched ALU-ALU batches to the ALU machines by change part (guide track).
-// Change parts are the "GUIDE TRACK OF ALU-ALU (BLOCK NO.01)" list from the packing floor.
+// MACHINE PLAN (ALU-ALU, BLISTER, STRIP)
+// Allots the matched batches to the primary packing machines by change part (guide track).
+// Change-part lists come from the packing floor: ALU-ALU Block 01, Blister Block 02 and 03, Strip.
 // =====================================================================================
 const ALU_PARTS = [
   { id: "P175C",  label: "CITIRIZINE SIZE - 175MM" },
@@ -379,14 +382,64 @@ const ALU_PARTS = [
   { id: "P214",   label: "BIG DIAMOND - 214MM" },
   { id: "POR15",  label: "OFLOXA ROUND - 10X15" }
 ];
-const PART_LABEL = Object.fromEntries(ALU_PARTS.map(p => [p.id, p.label]));
-const PART_ORDER = Object.fromEntries(ALU_PARTS.map((p, i) => [p.id, i]));
-// FMS foil sizes that are the same change part as a size on the guide-track list (confirmed by the production head).
+const BLISTER_PARTS = [
+  { id: "B150C",   label: "CITIRIZINE SIZE - 150MM (Block 02)" },
+  { id: "B180C5",  label: "CITIRIZINE SIZE - 180MM 5 TABS (Block 02)" },
+  { id: "B180C4",  label: "CITIRIZINE SIZE - 180MM 4 TABS (Block 02)" },
+  { id: "B200F",   label: "CITIRIZINE FISH - 200MM (Block 02)" },
+  { id: "B190C",   label: "CITIRIZINE SIZE - 190MM 20 TABS (Block 02)" },
+  { id: "B170O",   label: "OFLOXA SIZE - 170MM (Block 02)" },
+  { id: "B180O",   label: "OFLOXA SIZE - 180MM 6 TABS (Block 02)" },
+  { id: "B200P",   label: "PARA ROUND - 200MM (Block 02)" },
+  { id: "B150S",   label: "SDS SIZE - 150MM (Block 02)" },
+  { id: "B150S3",  label: "SDS/DS - 150MM 3 TABS (Block 02)" },
+  { id: "B150S7",  label: "SDS - 150MM 7 TABS (Block 02)" },
+  { id: "B150S1",  label: "SDS/DS - 150MM 1 TABS (Block 02)" },
+  { id: "B120M",   label: "SDS/DS MAGIC BLISTER - 120MM (Block 02)" },
+  { id: "B170D",   label: "DS SIZE - 170MM (Block 02)" },
+  { id: "B165D",   label: "DS SIZE - 165MM 5 TAB (Block 03)" },
+  { id: "B200L",   label: "SDS/DS (LEAF) - 200MM (Block 03)" },
+  { id: "B150K1",  label: "1 SIZE CAPS SDS - 150MM (Block 03)" },
+  { id: "B195S",   label: "SDS (NEW SDS SIZE) - 195MM (Block 03)" },
+  { id: "B170L7",  label: "LDS - 170MM 7 TABS (Block 03)" },
+  { id: "B170K0",  label: "0 SIZE CAPS - 170MM (Block 03)" },
+  { id: "B170L",   label: "LDS - 170MM (Block 03)" },
+  { id: "B170K12", label: "1,2 SIZE CAPS - 170MM (Block 03)" },
+  { id: "B170K04", label: "0 SIZE CAPS LDS - 170MM 4 CAPS (Block 03)" },
+  { id: "B150B",   label: "BOLUS ROUND - 150MM (Block 03)" },
+  { id: "B165B",   label: "BOLUS 1X2 - 165MM (Block 03)" },
+  { id: "B180D",   label: "DIAMOND - 180MM (Block 03)" }
+];
+const STRIP_PARTS = [
+  { id: "S140",   label: "140MM 10X10 SINGLE STRIP" },
+  { id: "S135",   label: "135MM LD 10X10 CETIRIZINE" },
+  { id: "S110",   label: "110MM 10X10 2 SIZE CAPSULES" },
+  { id: "S120",   label: "120MM 10X10 ORANGE" },
+  { id: "S150",   label: "150MM 10X10 1 SIZE CAPSULES" },
+  { id: "S180V",  label: "180MM 10X10 VLDS" },
+  { id: "S180O",  label: "180MM 10X10 OFLOXA ROUND" },
+  { id: "S175",   label: "175MM 10X10 LDS" },
+  { id: "S130L",  label: "130MM 10X10 LDS" },
+  { id: "S130L6", label: "130MM 10X6 LDS" },
+  { id: "S130K0", label: "130MM 10X10 0 SIZE CAPSULES" }
+];
+const mk = (prefix, n, fixedOn) => Array.from({ length: n }, (_, i) => ({ name: prefix + " " + (i + 1), part: fixedOn && fixedOn.includes(i + 1) ? "P225" : "", fixed: !!(fixedOn && fixedOn.includes(i + 1)) }));
+const SECTIONS = [
+  { id: "ALU",     title: "ALU-ALU", storeKey: "pm_alu_machines_v1",     parts: ALU_PARTS,     defaults: mk("ALU", 7, [1, 7]), resetText: "Reset to ALU 1 and ALU 7 fixed on 225MM" },
+  { id: "BLISTER", title: "Blister", storeKey: "pm_blister_machines_v1", parts: BLISTER_PARTS, defaults: mk("BLISTER", 3),     resetText: "Reset to all Auto" },
+  { id: "STRIP",   title: "Strip",   storeKey: "pm_strip_machines_v1",   parts: STRIP_PARTS,   defaults: mk("STRIP", 2),       resetText: "Reset to all Auto" }
+];
+const ALL_PARTS = ALU_PARTS.concat(BLISTER_PARTS, STRIP_PARTS);
+const PART_LABEL = Object.fromEntries(ALL_PARTS.map(p => [p.id, p.label]));
+const PART_ORDER = Object.fromEntries(ALL_PARTS.map((p, i) => [p.id, i]));
+// FMS foil sizes that are the same change part as a size on the lists (confirmed by the production head).
 const FOIL_SAME_AS = { 185: 190, 90: 92, 210: 214 };
+// Near-miss sizes taken as the listed size. Not yet confirmed, so the row carries a note.
+const FOIL_ASSUMED_SAME = { 166: 165, 119: 120 };
+const ALU_WIDTHS = [92, 175, 190, 205, 206, 211, 214, 220, 223, 225];
 // Foil widths that only exist on ALU-ALU. Used to flag rows whose composition text says BLISTER.
 const ALU_ONLY_WIDTHS = [92, 175, 205, 206, 211, 214, 220, 223, 225];
-const MACHINE_KEY = "pm_alu_machines_v1";
-const DEFAULT_MACHINES = [1, 2, 3, 4, 5, 6, 7].map(n => ({ name: "ALU " + n, part: (n === 1 || n === 7) ? "P225" : "", fixed: n === 1 || n === 7 }));
+const BLISTER_WIDTHS = [120, 150, 165, 170, 180, 195, 200];
 
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtN = n => Number(n || 0).toLocaleString("en-IN");
@@ -405,11 +458,16 @@ function layoutOf(comp) {
   if (!m) { const all = c.match(/\d+\s*X\s*\d+(?:\s*X\s*\d+)?/g); if (all) m = [null, all[all.length - 1]]; }
   return m ? m[1].replace(/\s+/g, "") : "";
 }
+// Tablets or capsules per strip: the last number of the pack layout (10X10 -> 10, 10X1X6 -> 6, 30X1 -> 1).
+function tabsOf(layout) { const n = String(layout || "").split("X").map(Number).filter(x => x > 0); return n.length ? n[n.length - 1] : 0; }
 function foilInfo(f) {
   const s = String(f || "").toUpperCase().replace(/\s+/g, "");
   const m = s.match(/(\d{2,3})/);
   const raw = m ? +m[1] : null;
-  return { w: raw != null && FOIL_SAME_AS[raw] ? FOIL_SAME_AS[raw] : raw, raw, ld: /LD/.test(s) };
+  let w = raw, assumed = "";
+  if (raw != null && FOIL_SAME_AS[raw]) w = FOIL_SAME_AS[raw];
+  else if (raw != null && FOIL_ASSUMED_SAME[raw]) { w = FOIL_ASSUMED_SAME[raw]; assumed = "Foil " + raw + "MM taken as " + w + "MM"; }
+  return { w, raw, ld: /LD/.test(s), assumed };
 }
 // "30000" -> 30000. "5000 +25000 RECOVERY" -> 30000 (parts joined with + are added up).
 function qtyOf(v) {
@@ -425,15 +483,15 @@ function sortableDate(s) {
   if (m) return m[3] + m[2] + m[1] + m[4] + m[5];
   return "999999999999";
 }
-// Decides the ALU change part for one batch. Returns { part, note } or { part: null, reason }.
-function aluPartFor(it) {
-  const f = foilInfo(it.foil), size = it.size, lay = it.layout;
+const unusual = it => "Size " + it.size + " / pack " + (it.layout || "?") + " is unusual for this change part";
+// Each *PartFor decides the change part for one batch. Returns { part, note } or { part: null, reason }.
+function aluPartFor(it, f) {
+  const size = it.size, lay = it.layout;
   const isCet = /CETRIZINE|CITIRIZINE/.test(size), isOflo = /OFLOXA/.test(size);
   const isSds = /^(SDS|DS|LDS)$/.test(size) || /^CAP [12]$/.test(size);
   const isVlds = /^VLDS$/.test(size) || size === "CAP 0";
   const isDia = /DIAMOND/.test(size);
   const curve = /CURVE|ZIG|GIG/.test(String(it.comp || "").toUpperCase());
-  if (f.w == null || f.ld) return { part: null, reason: "Foil size '" + it.foil + "' is not an ALU-ALU size" };
   let part = null, ok = true;
   switch (f.w) {
     case 225: part = curve ? "P225Z" : "P225"; ok = isSds; break;
@@ -448,7 +506,73 @@ function aluPartFor(it) {
     case 92:  part = (isCet || isOflo) ? "P92C" : isVlds ? "P92V" : "P92S"; ok = isCet || isOflo || isVlds || isSds; break;
     default: return { part: null, reason: "Foil size '" + it.foil + "' has no ALU-ALU change part on the list" };
   }
-  return { part, note: ok ? "" : "Size " + size + " / pack " + (lay || "?") + " is unusual for this change part" };
+  return { part, note: ok ? "" : unusual(it) };
+}
+function blisterPartFor(it, f) {
+  const size = it.size, tabs = tabsOf(it.layout);
+  const isCet = /CETRIZINE|CITIRIZINE/.test(size), isOflo = /OFLOXA/.test(size), isSD = /^(SDS|DS)$/.test(size);
+  const isBolus = /BOLUS/.test(size), isDia = /DIAMOND/.test(size), isPara = /PARA/.test(size);
+  let part = null, ok = true;
+  switch (f.w) {
+    case 120: part = "B120M"; ok = isSD; break;
+    case 150:
+      if (size === "CAP 1") part = "B150K1"; else if (isBolus) part = "B150B"; else if (isCet) part = "B150C";
+      else if (isSD) part = tabs === 1 ? "B150S1" : tabs === 3 ? "B150S3" : tabs === 7 ? "B150S7" : "B150S";
+      break;
+    case 165: part = isBolus ? "B165B" : "B165D"; ok = isBolus || size === "DS"; break;
+    case 170:
+      if (size === "CAP 0") part = tabs === 4 ? "B170K04" : "B170K0"; else if (/^CAP [12]$/.test(size)) part = "B170K12";
+      else if (isOflo) part = "B170O"; else if (size === "DS") part = "B170D"; else if (size === "LDS") part = tabs === 7 ? "B170L7" : "B170L";
+      break;
+    case 180:
+      if (isCet) { part = tabs === 4 ? "B180C4" : "B180C5"; ok = tabs === 4 || tabs === 5; } else if (isOflo) part = "B180O"; else if (isDia) part = "B180D";
+      break;
+    case 190: if (isCet) part = "B190C"; break;
+    case 195: part = "B195S"; ok = size === "SDS"; break;
+    case 200: if (isPara) part = "B200P"; else if (isCet) part = "B200F"; else if (isSD) part = "B200L"; break;
+  }
+  if (!part) return { part: null, reason: "No blister change part on the list for size " + size + " on foil '" + it.foil + "'" };
+  return { part, note: ok ? "" : unusual(it) };
+}
+function stripPartFor(it, f) {
+  const size = it.size, tabs = tabsOf(it.layout);
+  const isCet = /CETRIZINE|CITIRIZINE/.test(size), isOflo = /OFLOXA/.test(size);
+  let part = null, ok = true;
+  switch (f.w) {
+    case 110: part = "S110"; ok = size === "CAP 2"; break;
+    case 120: part = "S120"; ok = /ORENZ|ORANGE/.test(size); break;
+    case 130: part = size === "CAP 0" ? "S130K0" : tabs === 6 ? "S130L6" : "S130L"; ok = size === "CAP 0" || size === "LDS"; break;
+    case 135: part = "S135"; ok = isCet; break;
+    case 140: part = "S140"; break;
+    case 150: part = "S150"; ok = size === "CAP 1"; break;
+    case 175: part = "S175"; ok = size === "LDS"; break;
+    case 180: part = isOflo ? "S180O" : "S180V"; ok = isOflo || size === "VLDS"; break;
+    default: return { part: null, reason: "No strip change part on the list for foil '" + it.foil + "'" };
+  }
+  return { part, note: ok ? "" : unusual(it) };
+}
+// Decides machine type and change part for one batch.
+// Returns { type, part, note }, or { type, un: reason } when it cannot be allotted, or { skip: true } for bottle / no-foil packs.
+function classify(it) {
+  const f = foilInfo(it.foil), comp = it.pack;
+  let type = "", why = "";
+  if (f.ld) { type = "STRIP"; if (comp && comp !== "STRIP") why = "Composition says " + comp + ", LD foil is a strip size, planned as strip"; }
+  else if (comp === "STRIP" || comp === "BLISTER") {
+    if (f.w != null && ALU_ONLY_WIDTHS.includes(f.w)) return { type: "", un: "Composition says " + comp + " but foil " + it.foil + " is an ALU-ALU size. Check which is right" };
+    type = comp;
+  } else if (comp === "ALU") {
+    if (f.w != null && ALU_WIDTHS.includes(f.w)) type = "ALU";
+    else if (f.w != null && BLISTER_WIDTHS.includes(f.w)) { type = "BLISTER"; why = "Composition says ALU, foil " + it.foil + " is a blister size, planned as blister"; }
+    else return { type: "ALU", un: "Foil size '" + it.foil + "' has no change part on any list" };
+  } else {
+    // Composition does not say ALU, BLISTER or STRIP. No foil at all means a bottle or loose pack: not for these machines.
+    if (f.w == null) return { skip: true };
+    if (ALU_ONLY_WIDTHS.includes(f.w)) { type = "ALU"; why = "Pack type not written in composition, allotted by foil size"; }
+    else return { type: "", un: "Pack type is not written in the composition and foil " + it.foil + " is not an ALU-ALU size" };
+  }
+  const d = type === "ALU" ? aluPartFor(it, f) : type === "BLISTER" ? blisterPartFor(it, f) : stripPartFor(it, f);
+  if (!d.part) return { type, un: d.reason };
+  return { type, part: d.part, note: [d.note, f.assumed, why, it.check].filter(Boolean).join("; ") };
 }
 // Turns matched output rows (header + rows) into plan items.
 function itemsFromRows(kind, table) {
@@ -467,40 +591,20 @@ function itemsFromRows(kind, table) {
     };
   });
 }
-function loadMachines() {
+function loadMachines(sec) {
   try {
-    const m = JSON.parse(localStorage.getItem(MACHINE_KEY) || "null");
-    if (Array.isArray(m) && m.length === DEFAULT_MACHINES.length && m.every((x, i) => x && x.name === DEFAULT_MACHINES[i].name)) return m.map(x => ({ name: x.name, part: PART_LABEL[x.part] ? x.part : "", fixed: !!x.fixed && !!PART_LABEL[x.part] }));
+    const m = JSON.parse(localStorage.getItem(sec.storeKey) || "null"), ok = Object.fromEntries(sec.parts.map(p => [p.id, 1]));
+    if (Array.isArray(m) && m.length === sec.defaults.length && m.every((x, i) => x && x.name === sec.defaults[i].name)) return m.map(x => ({ name: x.name, part: ok[x.part] ? x.part : "", fixed: !!x.fixed && !!ok[x.part] }));
   } catch (e) {}
-  return DEFAULT_MACHINES.map(m => ({ ...m }));
+  return sec.defaults.map(m => ({ ...m }));
 }
-function saveMachines(m) { try { localStorage.setItem(MACHINE_KEY, JSON.stringify(m)); } catch (e) {} }
+function saveMachines(sec, m) { try { localStorage.setItem(sec.storeKey, JSON.stringify(m)); } catch (e) {} }
 
-// The allotment. Load is measured in tablets/capsules because machine speeds are not known.
-function planAlu(items, machineCfg) {
+// The allotment for one machine type. Load is measured in tablets/capsules because machine speeds are not known.
+function planSection(sec, items, machineCfg) {
   const machines = machineCfg.map(m => ({ name: m.name, part: m.part || "", fixed: !!(m.fixed && m.part), groups: [], qty: 0 }));
-  const unallotted = [], skipped = { BLISTER: 0, STRIP: 0, OTHER: 0 }, groups = new Map();
-  for (const it of items) {
-    const f = foilInfo(it.foil);
-    if (it.pack === "STRIP") { skipped.STRIP++; continue; }
-    if (it.pack === "BLISTER") {
-      if (f.w != null && !f.ld && ALU_ONLY_WIDTHS.includes(f.w)) unallotted.push({ ...it, reason: "Composition says BLISTER but foil " + it.foil + " is an ALU-ALU size. Check which is right" });
-      else skipped.BLISTER++;
-      continue;
-    }
-    let byFoil = "";
-    if (it.pack !== "ALU") {
-      // Composition does not say ALU, BLISTER or STRIP. No foil at all means a bottle or loose pack: not for these machines.
-      if (f.w == null) { skipped.OTHER++; continue; }
-      if (f.ld || !ALU_ONLY_WIDTHS.includes(f.w)) { unallotted.push({ ...it, reason: "Pack type is not written in the composition and foil " + it.foil + " is not an ALU-ALU size" }); continue; }
-      byFoil = "Pack type not written in composition, allotted by foil size";
-    }
-    const d = aluPartFor(it);
-    if (!d.part) { unallotted.push({ ...it, reason: d.reason }); continue; }
-    it.part = d.part; it.note = [d.note, byFoil, it.check].filter(Boolean).join("; ");
-    if (!groups.has(d.part)) groups.set(d.part, []);
-    groups.get(d.part).push(it);
-  }
+  const unallotted = [], groups = new Map();
+  for (const it of items) { if (!groups.has(it.part)) groups.set(it.part, []); groups.get(it.part).push(it); }
   const partQty = {}; for (const [p, arr] of groups) partQty[p] = arr.reduce((s, x) => s + x.qty, 0);
   const add = (m, part, arr) => { let g = m.groups.find(x => x.part === part); if (!g) { g = { part, items: [], qty: 0 }; m.groups.push(g); } for (const x of arr) { g.items.push(x); g.qty += x.qty; m.qty += x.qty; } };
   // 1. Change parts already on machines: split the batches between those machines, biggest batch first to the lighter machine.
@@ -519,7 +623,7 @@ function planAlu(items, machineCfg) {
   const movable = machines.filter(m => !m.fixed);
   const rest = [...groups.entries()].sort((a, b) => partQty[b[0]] - partQty[a[0]] || PART_ORDER[a[0]] - PART_ORDER[b[0]]);
   for (const [part, arr] of rest) {
-    if (!movable.length) { for (const it of arr) unallotted.push({ ...it, reason: "No free machine: every ALU machine is fixed on another change part" }); continue; }
+    if (!movable.length) { for (const it of arr) unallotted.push({ ...it, type: sec.id, reason: "No free machine: every " + sec.title + " machine is fixed on another change part" }); continue; }
     let best = movable[0];
     for (const m of movable) if (m.qty < best.qty || (m.qty === best.qty && m.groups.length < best.groups.length)) best = m;
     add(best, part, arr);
@@ -540,86 +644,120 @@ function planAlu(items, machineCfg) {
   // 4. Load check, so the fixed set-up can be judged against the real load.
   const avg = machines.length ? total / machines.length : 0, advice = [], partRows = [];
   const pct = q => total ? Math.round(q * 1000 / total) / 10 : 0;
-  for (const p of ALU_PARTS) {
+  for (const p of sec.parts) {
     const q = partQty[p.id]; if (!q) continue;
     const on = machines.filter(m => m.groups.some(g => g.part === p.id)).map(m => m.name);
+    if (!on.length) continue;
     partRows.push({ part: p.id, qty: q, batches: machines.reduce((s, m) => s + m.groups.filter(g => g.part === p.id).reduce((t, g) => t + g.items.length, 0), 0), share: pct(q), worth: avg ? Math.round(q * 10 / avg) / 10 : 0, on });
   }
   partRows.sort((a, b) => b.qty - a.qty);
+  const load = " of the ready " + sec.title + " load, ";
   for (const [part, ms] of installed) {
-    const fixedMs = ms.filter(m => m.fixed); if (!fixedMs.length || !partQty[part] || !avg) { if (fixedMs.length && !partQty[part]) advice.push(fixedMs.map(m => m.name).join(" and ") + " are fixed on " + PART_LABEL[part] + " but there is no ready batch for it today, so they stand idle in this plan."); continue; }
+    const fixedMs = ms.filter(m => m.fixed); if (!fixedMs.length) continue;
+    if (!partQty[part] || !avg) { advice.push(fixedMs.map(m => m.name).join(" and ") + (fixedMs.length > 1 ? " are" : " is") + " fixed on " + PART_LABEL[part] + " but there is no ready batch for it today, so " + (fixedMs.length > 1 ? "they stand" : "it stands") + " idle in this plan."); continue; }
     const k = ms.length, worth = partQty[part] / avg, each = partQty[part] / k;
     const others = machines.filter(m => !ms.includes(m)), oAvg = others.length ? others.reduce((s, m) => s + m.qty, 0) / others.length : 0;
-    const head = PART_LABEL[part] + " is " + pct(partQty[part]) + "% of the ready ALU load, " + worthTxt(worth) + ", and runs on " + k + " (" + ms.map(m => m.name).join(", ") + "). ";
+    const head = PART_LABEL[part] + " is " + pct(partQty[part]) + "%" + load + worthTxt(worth) + ", and runs on " + k + " (" + ms.map(m => m.name).join(", ") + "). ";
     if (worth >= k + 0.75) advice.push(head + "Each of them carries " + fmtN(Math.round(each)) + " against " + fmtN(Math.round(oAvg)) + " average on the other machines. Putting it on " + (Math.round(worth) - k > 1 ? (Math.round(worth) - k) + " more machines" : "one more machine") + " would even out the load.");
-    else if (worth <= k - 0.75) advice.push(head + "That is light for " + k + " fixed machines. One of them could be released for other change parts.");
+    else if (worth <= k - 0.75) advice.push(head + "That is light for " + k + " fixed machine" + (k > 1 ? "s" : "") + ". " + (k > 1 ? "One of them" : "It") + " could be released for other change parts.");
     else advice.push(head + "The fixed set-up fits today's load.");
   }
-  for (const r of partRows) if (!installed.has(r.part) && r.worth >= 1) advice.push(PART_LABEL[r.part] + " is " + r.share + "% of the ready ALU load, " + worthTxt(r.worth) + ". It is a candidate for its own fixed machine.");
-  return { machines, unallotted, skipped, total, avg, partRows, advice, changeovers: machines.reduce((s, m) => s + m.changeovers, 0), allotted: machines.reduce((s, m) => s + m.batches, 0) };
+  for (const r of partRows) if (!installed.has(r.part) && r.worth >= 1) advice.push(PART_LABEL[r.part] + " is " + r.share + "%" + load + worthTxt(r.worth) + ". It is a candidate for its own fixed machine.");
+  return { sec, machines, unallotted, total, avg, partRows, advice, changeovers: machines.reduce((s, m) => s + m.changeovers, 0), allotted: machines.reduce((s, m) => s + m.batches, 0) };
+}
+// Classifies every batch, then plans each machine type.
+function planAll(items, cfgs) {
+  const byType = { ALU: [], BLISTER: [], STRIP: [] }, unallotted = []; let skipped = 0;
+  for (const it of items) {
+    const c = classify(it);
+    if (c.skip) { skipped++; continue; }
+    if (c.un) { unallotted.push({ ...it, type: c.type, reason: c.un }); continue; }
+    it.type = c.type; it.part = c.part; it.note = c.note; byType[c.type].push(it);
+  }
+  const sections = SECTIONS.map(sec => planSection(sec, byType[sec.id], cfgs[sec.id]));
+  for (const p of sections) unallotted.push(...p.unallotted);
+  return { sections, unallotted, skipped, allotted: sections.reduce((s, p) => s + p.allotted, 0), changeovers: sections.reduce((s, p) => s + p.changeovers, 0) };
 }
 
 // ---------- plan UI ----------
-let machineCfg = loadMachines();
+const machineCfgs = Object.fromEntries(SECTIONS.map(sec => [sec.id, loadMachines(sec)]));
+const TYPE_TITLE = { ALU: "ALU-ALU", BLISTER: "Blister", STRIP: "Strip", "": "" };
 let planItems = null;
 function renderMachineSetup() {
-  const opts = sel => '<option value="">Auto (tool decides)</option>' + ALU_PARTS.map(p => '<option value="' + p.id + '"' + (p.id === sel ? " selected" : "") + ">" + esc(p.label) + "</option>").join("");
-  $("machineSetup").innerHTML = '<table class="setup"><tr><th>Machine</th><th>Change part on the machine now</th><th>Fixed</th></tr>'
-    + machineCfg.map((m, i) => "<tr><td><b>" + esc(m.name) + '</b></td><td><select data-i="' + i + '" class="mpart">' + opts(m.part) + '</select></td><td><input type="checkbox" class="mfix" data-i="' + i + '"' + (m.fixed ? " checked" : "") + (m.part ? "" : " disabled") + "></td></tr>").join("")
-    + '</table><div class="hint">Fixed means the machine only ever runs that change part. Not fixed means it starts on that change part and can change over afterwards. <a href="#" id="mreset">Reset to ALU 1 and ALU 7 fixed on 225MM</a></div>';
-  $("machineSetup").querySelectorAll(".mpart").forEach(s => s.onchange = () => { const m = machineCfg[+s.dataset.i]; m.part = s.value; if (!m.part) m.fixed = false; saveMachines(machineCfg); renderMachineSetup(); renderPlan(); });
-  $("machineSetup").querySelectorAll(".mfix").forEach(c => c.onchange = () => { machineCfg[+c.dataset.i].fixed = c.checked; saveMachines(machineCfg); renderPlan(); });
-  $("mreset").onclick = e => { e.preventDefault(); machineCfg = DEFAULT_MACHINES.map(m => ({ ...m })); saveMachines(machineCfg); renderMachineSetup(); renderPlan(); };
+  let h = "";
+  for (const sec of SECTIONS) {
+    const cfg = machineCfgs[sec.id];
+    const opts = sel => '<option value="">Auto (tool decides)</option>' + sec.parts.map(p => '<option value="' + p.id + '"' + (p.id === sel ? " selected" : "") + ">" + esc(p.label) + "</option>").join("");
+    const set = cfg.filter(m => m.part).map(m => m.name + (m.fixed ? " fixed" : "")).join(", ");
+    h += '<details class="setupBox" data-sec="' + sec.id + '"' + (sec.id === "ALU" ? " open" : "") + "><summary>" + sec.title + " machines (" + cfg.length + ")" + '<span class="muted" style="font-weight:400"> ' + (set ? "set: " + esc(set) : "all on Auto") + "</span></summary>"
+      + '<table class="setup"><tr><th>Machine</th><th>Change part on the machine now</th><th>Fixed</th></tr>'
+      + cfg.map((m, i) => "<tr><td><b>" + esc(m.name) + '</b></td><td><select data-sec="' + sec.id + '" data-i="' + i + '" class="mpart">' + opts(m.part) + '</select></td><td><input type="checkbox" class="mfix" data-sec="' + sec.id + '" data-i="' + i + '"' + (m.fixed ? " checked" : "") + (m.part ? "" : " disabled") + "></td></tr>").join("")
+      + '</table><div class="hint"><a href="#" class="mreset" data-sec="' + sec.id + '">' + sec.resetText + "</a></div></details>";
+  }
+  h += '<div class="hint">Fixed means the machine only ever runs that change part. Not fixed means it starts on that change part and can change over afterwards. Choices are remembered on this computer.</div>';
+  const openNow = {}; $("machineSetup").querySelectorAll("details.setupBox").forEach(d => openNow[d.dataset.sec] = d.open);
+  $("machineSetup").innerHTML = h;
+  $("machineSetup").querySelectorAll("details.setupBox").forEach(d => { if (d.dataset.sec in openNow) d.open = openNow[d.dataset.sec]; });
+  const secOf = id => SECTIONS.find(s => s.id === id);
+  $("machineSetup").querySelectorAll(".mpart").forEach(s => s.onchange = () => { const m = machineCfgs[s.dataset.sec][+s.dataset.i]; m.part = s.value; if (!m.part) m.fixed = false; saveMachines(secOf(s.dataset.sec), machineCfgs[s.dataset.sec]); renderMachineSetup(); renderPlan(); });
+  $("machineSetup").querySelectorAll(".mfix").forEach(c => c.onchange = () => { machineCfgs[c.dataset.sec][+c.dataset.i].fixed = c.checked; saveMachines(secOf(c.dataset.sec), machineCfgs[c.dataset.sec]); renderMachineSetup(); renderPlan(); });
+  $("machineSetup").querySelectorAll(".mreset").forEach(a => a.onclick = e => { e.preventDefault(); const sec = secOf(a.dataset.sec); machineCfgs[sec.id] = sec.defaults.map(m => ({ ...m })); saveMachines(sec, machineCfgs[sec.id]); renderMachineSetup(); renderPlan(); });
 }
 function planWorkbook(plan) {
   const wb = XLSX.utils.book_new(), day = stamp();
-  const sum = [["ALU-ALU MACHINE PLAN", day], ["Load is counted in tablets/capsules. Only batches whose carton and foil are ready are planned."], [],
-    ["Machine", "Fixed", "Change parts in running order", "Batches", "Tablets/Capsules", "Share of load %", "Changeovers"]];
-  for (const m of plan.machines) sum.push([m.name, m.fixed ? "Fixed" : "", m.groups.map(g => PART_LABEL[g.part]).join("  ->  ") || "(nothing to run)", m.batches, m.qty, plan.total ? Math.round(m.qty * 1000 / plan.total) / 10 : 0, m.changeovers]);
-  sum.push(["TOTAL", "", "", plan.allotted, plan.total, 100, plan.changeovers], [], ["LOAD CHECK"]);
-  for (const a of plan.advice) sum.push([a]);
-  sum.push([], ["Change part", "Batches", "Tablets/Capsules", "Share of load %", "Machines' worth", "Runs on"]);
-  for (const r of plan.partRows) sum.push([PART_LABEL[r.part], r.batches, r.qty, r.share, r.worth, r.on.join(", ")]);
-  sum.push([], ["Not allotted (see last sheet)", plan.unallotted.length], ["Blister batches left for later", plan.skipped.BLISTER], ["Strip batches left for later", plan.skipped.STRIP], ["Bottle or no-foil packs (not for these machines)", plan.skipped.OTHER]);
-  const ws0 = XLSX.utils.aoa_to_sheet(sum); ws0["!cols"] = [{ wch: 38 }, { wch: 10 }, { wch: 70 }, { wch: 10 }, { wch: 18 }, { wch: 16 }, { wch: 14 }];
+  const sum = [["PRIMARY PACKING MACHINE PLAN", day], ["Load is counted in tablets/capsules. Only batches whose carton and foil are ready are planned."]];
+  for (const p of plan.sections) {
+    sum.push([], [p.sec.title.toUpperCase()], ["Machine", "Fixed", "Change parts in running order", "Batches", "Tablets/Capsules", "Share of load %", "Changeovers"]);
+    for (const m of p.machines) sum.push([m.name, m.fixed ? "Fixed" : "", m.groups.map(g => PART_LABEL[g.part]).join("  ->  ") || "(nothing to run)", m.batches, m.qty, p.total ? Math.round(m.qty * 1000 / p.total) / 10 : 0, m.changeovers]);
+    sum.push(["TOTAL " + p.sec.title, "", "", p.allotted, p.total, p.total ? 100 : 0, p.changeovers]);
+    if (p.advice.length) { sum.push(["Load check"]); for (const a of p.advice) sum.push([a]); }
+    if (p.partRows.length) { sum.push(["Change part", "Batches", "Tablets/Capsules", "Share of load %", "Machines' worth", "Runs on"]); for (const r of p.partRows) sum.push([PART_LABEL[r.part], r.batches, r.qty, r.share, r.worth, r.on.join(", ")]); }
+  }
+  sum.push([], ["Not allotted (see last sheet)", plan.unallotted.length], ["Bottle or no-foil packs (not for these machines)", plan.skipped]);
+  const ws0 = XLSX.utils.aoa_to_sheet(sum); ws0["!cols"] = [{ wch: 44 }, { wch: 10 }, { wch: 70 }, { wch: 10 }, { wch: 18 }, { wch: 16 }, { wch: 14 }];
   XLSX.utils.book_append_sheet(wb, ws0, "Summary");
   const H = ["Seq", "Change part", "Changeover", "Batch", "Brand", "Composition", "Type", "Size", "Pack", "Foil size", "Qty", "Planned date", "Delay", "Carton nos", "Foil issued", "Note", "Actual start", "Actual end", "Remarks"];
-  const W = [5, 34, 18, 11, 28, 60, 8, 20, 9, 14, 9, 17, 16, 10, 10, 34, 12, 12, 20].map(w => ({ wch: w }));
+  const W = [5, 40, 18, 11, 28, 60, 8, 20, 9, 14, 9, 17, 16, 10, 10, 40, 12, 12, 20].map(w => ({ wch: w }));
   const rowOf = it => [it.seq, PART_LABEL[it.part], it.changeover, it.batch, it.brand, it.comp, it.kind, it.size, it.layout, it.foil, it.qty, it.planned, it.delay, it.carton, it.foilIssued, it.note, "", "", ""];
   const all = [["Machine"].concat(H.slice(0, 16))];
-  for (const m of plan.machines) {
+  for (const p of plan.sections) for (const m of p.machines) {
     const rows = [H]; for (const g of m.groups) for (const it of g.items) { rows.push(rowOf(it)); all.push([m.name].concat(rowOf(it).slice(0, 16))); }
     const ws = XLSX.utils.aoa_to_sheet(rows); ws["!cols"] = W; XLSX.utils.book_append_sheet(wb, ws, m.name);
   }
-  const wsA = XLSX.utils.aoa_to_sheet(all); wsA["!cols"] = [{ wch: 8 }].concat(W.slice(0, 16)); XLSX.utils.book_append_sheet(wb, wsA, "All ALU");
-  const un = [["Reason", "Batch", "Brand", "Composition", "Type", "Size", "Pack", "Foil size", "Qty", "Planned date", "Delay"]];
-  for (const it of plan.unallotted) un.push([it.reason, it.batch, it.brand, it.comp, it.kind, it.size, it.layout, it.foil, it.qty, it.planned, it.delay]);
-  const wsU = XLSX.utils.aoa_to_sheet(un); wsU["!cols"] = [{ wch: 60 }, { wch: 11 }, { wch: 28 }, { wch: 60 }, { wch: 8 }, { wch: 20 }, { wch: 9 }, { wch: 14 }, { wch: 9 }, { wch: 17 }, { wch: 16 }];
+  const wsA = XLSX.utils.aoa_to_sheet(all); wsA["!cols"] = [{ wch: 11 }].concat(W.slice(0, 16)); XLSX.utils.book_append_sheet(wb, wsA, "All planned");
+  const un = [["Reason", "Machine type", "Batch", "Brand", "Composition", "Type", "Size", "Pack", "Foil size", "Qty", "Planned date", "Delay"]];
+  for (const it of plan.unallotted) un.push([it.reason, TYPE_TITLE[it.type || ""], it.batch, it.brand, it.comp, it.kind, it.size, it.layout, it.foil, it.qty, it.planned, it.delay]);
+  const wsU = XLSX.utils.aoa_to_sheet(un); wsU["!cols"] = [{ wch: 64 }, { wch: 12 }, { wch: 11 }, { wch: 28 }, { wch: 60 }, { wch: 8 }, { wch: 20 }, { wch: 9 }, { wch: 14 }, { wch: 9 }, { wch: 17 }, { wch: 16 }];
   XLSX.utils.book_append_sheet(wb, wsU, "Not allotted");
   return wb;
 }
 function renderPlan() {
   const out = $("planOut");
   if (!planItems) { out.innerHTML = '<div class="status">Run the match first. The plan appears here.</div>'; return; }
-  const plan = planAlu(planItems.map(x => ({ ...x })), machineCfg); window.lastPlan = plan;
-  if (!plan.allotted && !plan.unallotted.length) { out.innerHTML = '<div class="status">No ALU-ALU batches in the matched list.</div>'; return; }
-  let h = "<table><tr><th>Machine</th><th>Change parts, in running order</th><th>Batches</th><th>Tablets/Capsules</th><th>Share</th><th>Changeovers</th></tr>";
-  for (const m of plan.machines) h += "<tr><td><b>" + esc(m.name) + "</b>" + (m.fixed ? ' <span class="tag">fixed</span>' : "") + "</td><td>" + (m.groups.map(g => esc(PART_LABEL[g.part]) + ' <span class="muted">(' + g.items.length + ")</span>").join(" &rarr; ") || '<span class="muted">nothing to run</span>') + '</td><td class="n">' + m.batches + '</td><td class="n">' + fmtN(m.qty) + '</td><td class="n">' + (plan.total ? Math.round(m.qty * 1000 / plan.total) / 10 : 0) + '%</td><td class="n">' + m.changeovers + "</td></tr>";
-  h += '<tr><td><b>Total</b></td><td></td><td class="n"><b>' + plan.allotted + '</b></td><td class="n"><b>' + fmtN(plan.total) + '</b></td><td class="n">100%</td><td class="n"><b>' + plan.changeovers + "</b></td></tr></table>";
-  if (plan.advice.length) h += '<div class="advice"><b>Load check</b><ul>' + plan.advice.map(a => "<li>" + esc(a) + "</li>").join("") + "</ul></div>";
-  h += '<div style="margin-top:12px"><button class="dl" id="planDl">Download ALU PLAN ' + stamp() + '.xlsx</button></div><div class="hint">One sheet per machine, plus Summary, All ALU and Not allotted. Blister left for later: ' + plan.skipped.BLISTER + " batches. Strip left for later: " + plan.skipped.STRIP + " batches. Bottle or no-foil packs: " + plan.skipped.OTHER + ".</div>";
-  for (const m of plan.machines) if (m.batches) {
-    h += "<details><summary>" + esc(m.name) + ": " + m.batches + " batches, " + fmtN(m.qty) + '</summary><div class="flags"><table><tr><th>#</th><th>Change part</th><th>Batch</th><th>Brand</th><th>Qty</th><th>Size</th><th>Pack</th><th>Foil</th><th>Planned</th><th>Note</th></tr>';
-    for (const g of m.groups) for (const it of g.items) h += "<tr" + (it.changeover === "CHANGEOVER" ? ' class="co"' : "") + "><td>" + it.seq + "</td><td>" + (it.changeover ? "<b>" + esc(PART_LABEL[it.part]) + "</b><br><span class=\"muted\">" + esc(it.changeover) + "</span>" : "") + "</td><td>" + esc(it.batch) + "</td><td>" + esc(it.brand) + '</td><td class="n">' + fmtN(it.qty) + "</td><td>" + esc(it.size) + "</td><td>" + esc(it.layout) + "</td><td>" + esc(it.foil) + "</td><td>" + esc(it.planned.slice(0, 10)) + "</td><td>" + esc(it.note) + "</td></tr>";
-    h += "</table></div></details>";
+  const plan = planAll(planItems.map(x => ({ ...x })), machineCfgs); window.lastPlan = plan;
+  if (!plan.allotted && !plan.unallotted.length) { out.innerHTML = '<div class="status">No batches to plan in the matched list.</div>'; return; }
+  const fname = "MACHINE PLAN " + stamp() + ".xlsx";
+  let h = '<div><button class="dl" id="planDl">Download ' + fname + '</button></div><div class="hint">One sheet per machine, plus Summary, All planned and Not allotted. Planned: ' + plan.allotted + " batches with " + plan.changeovers + " changeovers. Not allotted: " + plan.unallotted.length + ". Bottle or no-foil packs left out: " + plan.skipped + ".</div>";
+  for (const p of plan.sections) {
+    h += '<h3 class="sech">' + p.sec.title + ' <span class="muted">' + p.allotted + " batches, " + fmtN(p.total) + "</span></h3>";
+    if (!p.allotted) { h += '<div class="muted">No ready ' + p.sec.title + " batches today.</div>"; continue; }
+    h += "<table><tr><th>Machine</th><th>Change parts, in running order</th><th>Batches</th><th>Tablets/Capsules</th><th>Share</th><th>Changeovers</th></tr>";
+    for (const m of p.machines) h += "<tr><td><b>" + esc(m.name) + "</b>" + (m.fixed ? ' <span class="tag">fixed</span>' : "") + "</td><td>" + (m.groups.map(g => esc(PART_LABEL[g.part]) + ' <span class="muted">(' + g.items.length + ")</span>").join(" &rarr; ") || '<span class="muted">nothing to run</span>') + '</td><td class="n">' + m.batches + '</td><td class="n">' + fmtN(m.qty) + '</td><td class="n">' + (p.total ? Math.round(m.qty * 1000 / p.total) / 10 : 0) + '%</td><td class="n">' + m.changeovers + "</td></tr>";
+    h += '<tr><td><b>Total</b></td><td></td><td class="n"><b>' + p.allotted + '</b></td><td class="n"><b>' + fmtN(p.total) + '</b></td><td class="n">100%</td><td class="n"><b>' + p.changeovers + "</b></td></tr></table>";
+    if (p.advice.length) h += '<div class="advice"><b>Load check</b><ul>' + p.advice.map(a => "<li>" + esc(a) + "</li>").join("") + "</ul></div>";
+    for (const m of p.machines) if (m.batches) {
+      h += "<details><summary>" + esc(m.name) + ": " + m.batches + " batches, " + fmtN(m.qty) + '</summary><div class="flags"><table><tr><th>#</th><th>Change part</th><th>Batch</th><th>Brand</th><th>Qty</th><th>Size</th><th>Pack</th><th>Foil</th><th>Planned</th><th>Note</th></tr>';
+      for (const g of m.groups) for (const it of g.items) h += "<tr" + (it.changeover === "CHANGEOVER" ? ' class="co"' : "") + "><td>" + it.seq + "</td><td>" + (it.changeover ? "<b>" + esc(PART_LABEL[it.part]) + '</b><br><span class="muted">' + esc(it.changeover) + "</span>" : "") + "</td><td>" + esc(it.batch) + "</td><td>" + esc(it.brand) + '</td><td class="n">' + fmtN(it.qty) + "</td><td>" + esc(it.size) + "</td><td>" + esc(it.layout) + "</td><td>" + esc(it.foil) + "</td><td>" + esc(it.planned.slice(0, 10)) + "</td><td>" + esc(it.note) + "</td></tr>";
+      h += "</table></div></details>";
+    }
   }
   if (plan.unallotted.length) {
-    h += "<details open><summary>Not allotted, needs a look: " + plan.unallotted.length + ' batches</summary><div class="flags"><table><tr><th>Reason</th><th>Batch</th><th>Brand</th><th>Qty</th><th>Size</th><th>Pack</th><th>Foil</th></tr>';
+    h += '<h3 class="sech">Not allotted, needs a look <span class="muted">' + plan.unallotted.length + ' batches</span></h3><details open><summary>Show the list</summary><div class="flags"><table><tr><th>Reason</th><th>Batch</th><th>Brand</th><th>Qty</th><th>Size</th><th>Pack</th><th>Foil</th></tr>';
     for (const it of plan.unallotted) h += "<tr><td>" + esc(it.reason) + "</td><td>" + esc(it.batch) + "</td><td>" + esc(it.brand) + '</td><td class="n">' + fmtN(it.qty) + "</td><td>" + esc(it.size) + "</td><td>" + esc(it.layout) + "</td><td>" + esc(it.foil) + "</td></tr>";
     h += "</table></div></details>";
   }
   out.innerHTML = h;
-  $("planDl").onclick = () => XLSX.writeFile(planWorkbook(plan), "ALU PLAN " + stamp() + ".xlsx", { compression: true });
+  $("planDl").onclick = () => XLSX.writeFile(planWorkbook(plan), fname, { compression: true });
 }
 function setPlanFromResults(results) {
   planItems = results.flatMap(r => itemsFromRows(r.label, r.rows));
@@ -627,11 +765,13 @@ function setPlanFromResults(results) {
 }
 renderMachineSetup(); renderPlan();
 // For automated testing: plan straight from raw FMS CSV text, skipping the sheet match.
-window.planFromText = (t, c, cfg) => {
+window.planFromText = (t, c, cfgs) => {
   const items = [];
   for (const [txt, kind] of [[t, "Tablet"], [c, "Capsule"]]) if (txt) { const d = detect("x.csv", txt); items.push(...itemsFromRows(kind, [d.hdr].concat(d.rows))); }
-  const plan = planAlu(items, cfg || DEFAULT_MACHINES);
-  return { allot: plan.machines.flatMap(m => m.groups.flatMap(g => g.items.map(it => [it.batch, m.name, it.seq, it.part, it.changeover, it.note]))), un: plan.unallotted.map(it => [it.batch, it.reason]), skipped: plan.skipped, machines: plan.machines.map(m => [m.name, m.qty, m.batches, m.changeovers, m.groups.map(g => g.part)]), advice: plan.advice, total: plan.total };
+  const full = Object.fromEntries(SECTIONS.map(s => [s.id, (cfgs && cfgs[s.id]) || s.defaults]));
+  const plan = planAll(items, full);
+  return { allot: plan.sections.flatMap(p => p.machines.flatMap(m => m.groups.flatMap(g => g.items.map(it => [it.batch, m.name, it.seq, it.part, it.changeover, it.note])))), un: plan.unallotted.map(it => [it.batch, it.reason]), skipped: plan.skipped,
+    machines: plan.sections.flatMap(p => p.machines.map(m => [m.name, m.qty, m.batches, m.changeovers, m.groups.map(g => g.part)])), advice: plan.sections.flatMap(p => p.advice) };
 };
 // For automated testing: window.runWithText(tabletCsvText, capsuleCsvText)
 window.runWithText = async (t, c) => { files.tablet = t ? detect("tablet.csv", t) : null; files.capsule = c ? detect("capsule.csv", c) : null; showSlots(); await run(); return Object.fromEntries(Object.entries(window.lastOutputs).map(([k, v]) => [k, v.length])); };
