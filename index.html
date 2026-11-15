@@ -54,6 +54,11 @@
   tr.co td { border-top:2px solid var(--warn); }
   h3.sech { font-size:16px; margin:22px 0 6px; padding-top:14px; border-top:1px solid var(--line); }
   details.setupBox { background:#fff; }
+  .schedBox { border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:#f3f7fb; margin-bottom:10px; }
+  .schedRow { display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:8px; font-size:14px; }
+  .schedRow input { font:inherit; font-size:14px; padding:3px 6px; }
+  .schedRow input[type=number] { width:70px; }
+  td.t { white-space:nowrap; font-variant-numeric:tabular-nums; }
   details.setupBox table.setup { margin-top:6px; }
 </style>
 </head>
@@ -111,14 +116,15 @@
       <div class="num">4</div>
       <div style="flex:1">
         <h2>Machine plan</h2>
-        <p class="hint" style="margin-top:0">Allots the matched batches to the ALU-ALU, Blister and Strip machines by change part, so each machine changes over as little as possible.</p>
+        <p class="hint" style="margin-top:0">Allots the matched batches to the ALU-ALU, Blister and Strip machines by change part, so each machine changes over as little as possible, and gives every batch a start and end time.</p>
+        <div id="schedSetup"></div>
         <div id="machineSetup"></div>
         <div id="planOut" style="margin-top:14px"></div>
       </div>
     </div>
   </div>
 
-  <p class="hint">Rules: exact batch number match. Carton Sent (column I) must be ticked or have a quantity; the word “Pend” does not count. Foil Qty Issued must be filled. Foil Qty Returned must be blank on every row for that batch; a typed 0 counts as filled. Tablets are checked on the TABLET and Beta Lectum tabs, capsules on the CAPSULE tabs, of the PM sheets named in the bookmark. Machine plan: change part is chosen by foil size and tablet or capsule size; LD foil means strip; 185MM, 90MM and 210MM in FMS are treated as the 190MM, 92MM and 214MM change parts; load is counted in tablets or capsules.</p>
+  <p class="hint">Rules: exact batch number match. Carton Sent (column I) must be ticked or have a quantity; the word “Pend” does not count. Foil Qty Issued must be filled. Foil Qty Returned must be blank on every row for that batch; a typed 0 counts as filled. Tablets are checked on the TABLET and Beta Lectum tabs, capsules on the CAPSULE tabs, of the PM sheets named in the bookmark. Machine plan: change part is chosen by foil size and tablet or capsule size; LD foil means strip; 185MM, 90MM and 210MM in FMS are treated as the 190MM, 92MM and 214MM change parts; machines are balanced by running hours; each batch gets a start and end from its quantity and the time per lakh of its change part.</p>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -412,7 +418,8 @@ const BLISTER_PARTS = [
   { id: "B165B",   label: "BOLUS 1X2 - 165MM (Block 03)" },
   { id: "B180D",   label: "DIAMOND - 180MM (Block 03)" },
   { id: "B175X",   label: "175MM 10X15" },
-  { id: "B125",    label: "125MM 10X10" }
+  { id: "B125",    label: "125MM 10X10" },
+  { id: "B170L15", label: "LDS - 170MM 10X15" }
 ];
 const STRIP_PARTS = [
   { id: "S140",   label: "140MM 10X10 SINGLE STRIP (2 SIZE CAPS)" },
@@ -445,6 +452,18 @@ const ALU_WIDTHS = [92, 167, 175, 190, 205, 206, 211, 214, 220, 223, 225];
 // 175MM is not in it: there is also a 175MM 10X15 blister part and a 175MM LDS strip part.
 const ALU_ONLY_WIDTHS = [92, 167, 205, 206, 211, 214, 220, 223, 225];
 const BLISTER_WIDTHS = [120, 125, 150, 165, 170, 180, 195, 200];
+// Minutes to pack 1 lakh tablets or capsules on each change part: running time only, same on any machine of that type.
+// From the production head's timing sheet. A change part missing here has no time yet.
+const RATE_MIN = {
+  P166X: 480, P190V: 240, P206: 240, P225: 140, P211: 150, P223: 140, P205: 120, P175C: 120,
+  B125: 300, B170L: 180, B150S: 120, B150C: 90, B170D: 120, B170L15: 120, B150S3: 300, B180D: 120, B200P: 120, B180C5: 300, B180C4: 300, B180O: 300,
+  S175: 360, S180V: 300, S140: 240, S150: 240, S130L: 240, S130L6: 300, S110: 240, S120: 360, S180O: 120, S135: 180
+};
+const durMin = (qty, rate) => Math.ceil(qty * rate / 100000);
+for (const sec of SECTIONS) { const r = sec.parts.map(p => RATE_MIN[p.id]).filter(Boolean); sec.avgRate = Math.round(r.reduce((a, b) => a + b, 0) / r.length); }
+const SCHED_KEY = "pm_schedule_v1";
+// Working hours are a placeholder until the factory's shift timings are confirmed. Changeover and gap are the owner's figures.
+const SCHED_DEFAULT = { dayStart: "06:00", dayEnd: "22:30", changeover: 120, gap: 15 };
 
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtN = n => Number(n || 0).toLocaleString("en-IN");
@@ -530,7 +549,7 @@ function blisterPartFor(it, f) {
     case 165: part = isBolus ? "B165B" : "B165D"; ok = isBolus || size === "DS"; break;
     case 170:
       if (size === "CAP 0") part = tabs === 4 ? "B170K04" : "B170K0"; else if (/^CAP [12]$/.test(size)) part = "B170K12";
-      else if (isOflo) part = "B170O"; else if (isSD) part = "B170D"; else if (size === "LDS") part = tabs === 7 ? "B170L7" : "B170L";
+      else if (isOflo) part = "B170O"; else if (isSD) part = "B170D"; else if (size === "LDS") part = tabs === 7 ? "B170L7" : tabs === 15 ? "B170L15" : "B170L";
       break;
     case 175: part = "B175X"; ok = tabs === 15; break;
     case 180:
@@ -612,13 +631,19 @@ function loadMachines(sec) {
 }
 function saveMachines(sec, m) { try { localStorage.setItem(sec.storeKey, JSON.stringify(m)); } catch (e) {} }
 
-// The allotment for one machine type. Load is measured in tablets/capsules because machine speeds are not known.
-function planSection(sec, items, machineCfg) {
-  const machines = machineCfg.map(m => ({ name: m.name, part: m.part || "", fixed: !!(m.fixed && m.part), groups: [], qty: 0 }));
+// The allotment for one machine type.
+// Load is measured in running minutes (quantity x minutes per lakh). A change part with no time yet is counted at the
+// average rate of its machine type, for balancing only.
+function planSection(sec, items, machineCfg, opts) {
+  const machines = machineCfg.map(m => ({ name: m.name, part: m.part || "", fixed: !!(m.fixed && m.part), groups: [], qty: 0, run: 0, load: 0 }));
   const unallotted = [], groups = new Map();
-  for (const it of items) { if (!groups.has(it.part)) groups.set(it.part, []); groups.get(it.part).push(it); }
-  const partQty = {}; for (const [p, arr] of groups) partQty[p] = arr.reduce((s, x) => s + x.qty, 0);
-  const add = (m, part, arr) => { let g = m.groups.find(x => x.part === part); if (!g) { g = { part, items: [], qty: 0 }; m.groups.push(g); } for (const x of arr) { g.items.push(x); g.qty += x.qty; m.qty += x.qty; } };
+  for (const it of items) {
+    it.timed = !!RATE_MIN[it.part]; it.min = durMin(it.qty, RATE_MIN[it.part] || sec.avgRate);
+    if (!groups.has(it.part)) groups.set(it.part, []); groups.get(it.part).push(it);
+  }
+  const partQty = {}, partMin = {};
+  for (const [p, arr] of groups) { partQty[p] = arr.reduce((s, x) => s + x.qty, 0); partMin[p] = arr.reduce((s, x) => s + x.min, 0); }
+  const add = (m, part, arr) => { let g = m.groups.find(x => x.part === part); if (!g) { g = { part, items: [], qty: 0, min: 0 }; m.groups.push(g); } for (const x of arr) { g.items.push(x); g.qty += x.qty; g.min += x.min; m.qty += x.qty; m.run += x.min; m.load += x.min; } };
   // 1. Change parts already on machines: split the batches between those machines, biggest batch first to the lighter machine.
   const installed = new Map();
   machines.forEach(m => { if (m.part) { if (!installed.has(m.part)) installed.set(m.part, []); installed.get(m.part).push(m); } });
@@ -631,18 +656,20 @@ function planSection(sec, items, machineCfg) {
     }
     groups.delete(part);
   }
-  // 2. Every other change part goes whole to one movable machine: biggest change part first to the lightest machine.
+  // 2. Every other change part goes whole to one movable machine, so it is changed over only once:
+  //    the change part with the most running hours first, to the machine with the fewest hours so far.
   const movable = machines.filter(m => !m.fixed);
-  const rest = [...groups.entries()].sort((a, b) => partQty[b[0]] - partQty[a[0]] || PART_ORDER[a[0]] - PART_ORDER[b[0]]);
+  const rest = [...groups.entries()].sort((a, b) => partMin[b[0]] - partMin[a[0]] || PART_ORDER[a[0]] - PART_ORDER[b[0]]);
   for (const [part, arr] of rest) {
     if (!movable.length) { for (const it of arr) unallotted.push({ ...it, type: sec.id, reason: "No free machine: every " + sec.title + " machine is fixed on another change part" }); continue; }
     let best = movable[0];
-    for (const m of movable) if (m.qty < best.qty || (m.qty === best.qty && m.groups.length < best.groups.length)) best = m;
+    for (const m of movable) if (m.load < best.load || (m.load === best.load && m.groups.length < best.groups.length)) best = m;
+    if (best.groups.length || best.part) best.load += opts.changeover;
     add(best, part, arr);
   }
   // 3. Running order on each machine: the change part already on it first, then the change part with the oldest pending batch.
   const cmpItem = (a, b) => (a.pkey < b.pkey ? -1 : a.pkey > b.pkey ? 1 : 0) || (a.comp < b.comp ? -1 : a.comp > b.comp ? 1 : 0) || (a.batch < b.batch ? -1 : a.batch > b.batch ? 1 : 0);
-  let total = 0;
+  let total = 0, totalRun = 0;
   for (const m of machines) {
     for (const g of m.groups) { g.items.sort(cmpItem); g.oldest = g.items.length ? g.items[0].pkey : "999999999999"; }
     m.groups = m.groups.filter(g => g.items.length);
@@ -651,34 +678,69 @@ function planSection(sec, items, machineCfg) {
     m.changeovers = Math.max(0, m.groups.length - 1) + (m.part && m.groups.length && m.groups[0].part !== m.part ? 1 : 0);
     let seq = 0;
     m.groups.forEach((g, gi) => g.items.forEach((it, ii) => { it.machine = m.name; it.seq = ++seq; it.changeover = ii > 0 ? "" : gi === 0 ? (m.part === g.part ? "Already on machine" : m.part ? "CHANGEOVER" : "First set-up") : "CHANGEOVER"; }));
-    total += m.qty;
+    total += m.qty; totalRun += m.run;
   }
-  // 4. Load check, so the fixed set-up can be judged against the real load.
-  const avg = machines.length ? total / machines.length : 0, advice = [], partRows = [];
-  const pct = q => total ? Math.round(q * 1000 / total) / 10 : 0;
+  // 4. Load check, in running hours, so the fixed set-up can be judged against the real load.
+  const avg = machines.length ? totalRun / machines.length : 0, advice = [], partRows = [];
+  const pct = q => totalRun ? Math.round(q * 1000 / totalRun) / 10 : 0;
   for (const p of sec.parts) {
-    const q = partQty[p.id]; if (!q) continue;
+    const q = partMin[p.id]; if (!q) continue;
     const on = machines.filter(m => m.groups.some(g => g.part === p.id)).map(m => m.name);
     if (!on.length) continue;
-    partRows.push({ part: p.id, qty: q, batches: machines.reduce((s, m) => s + m.groups.filter(g => g.part === p.id).reduce((t, g) => t + g.items.length, 0), 0), share: pct(q), worth: avg ? Math.round(q * 10 / avg) / 10 : 0, on });
+    partRows.push({ part: p.id, qty: partQty[p.id], min: q, timed: !!RATE_MIN[p.id], batches: machines.reduce((s, m) => s + m.groups.filter(g => g.part === p.id).reduce((t, g) => t + g.items.length, 0), 0), share: pct(q), worth: avg ? Math.round(q * 10 / avg) / 10 : 0, on });
   }
-  partRows.sort((a, b) => b.qty - a.qty);
-  const load = " of the ready " + sec.title + " load, ";
+  partRows.sort((a, b) => b.min - a.min);
+  const load = " of the ready " + sec.title + " running hours, ";
   for (const [part, ms] of installed) {
     const fixedMs = ms.filter(m => m.fixed); if (!fixedMs.length) continue;
-    if (!partQty[part] || !avg) { advice.push(fixedMs.map(m => m.name).join(" and ") + (fixedMs.length > 1 ? " are" : " is") + " fixed on " + PART_LABEL[part] + " but there is no ready batch for it today, so " + (fixedMs.length > 1 ? "they stand" : "it stands") + " idle in this plan."); continue; }
-    const k = ms.length, worth = partQty[part] / avg, each = partQty[part] / k;
-    const others = machines.filter(m => !ms.includes(m)), oAvg = others.length ? others.reduce((s, m) => s + m.qty, 0) / others.length : 0;
-    const head = PART_LABEL[part] + " is " + pct(partQty[part]) + "%" + load + worthTxt(worth) + ", and runs on " + k + " (" + ms.map(m => m.name).join(", ") + "). ";
-    if (worth >= k + 0.75) advice.push(head + "Each of them carries " + fmtN(Math.round(each)) + " against " + fmtN(Math.round(oAvg)) + " average on the other machines. Putting it on " + (Math.round(worth) - k > 1 ? (Math.round(worth) - k) + " more machines" : "one more machine") + " would even out the load.");
-    else if (worth <= k - 0.75) advice.push(head + "That is light for " + k + " fixed machine" + (k > 1 ? "s" : "") + ". " + (k > 1 ? "One of them" : "It") + " could be released for other change parts.");
+    if (!partMin[part] || !avg) { advice.push(fixedMs.map(m => m.name).join(" and ") + (fixedMs.length > 1 ? " are" : " is") + " fixed on " + PART_LABEL[part] + " but there is no ready batch for it today, so " + (fixedMs.length > 1 ? "they stand" : "it stands") + " idle in this plan."); continue; }
+    const k = ms.length, worth = partMin[part] / avg, each = partMin[part] / k;
+    const others = machines.filter(m => !ms.includes(m)), oAvg = others.length ? others.reduce((s, m) => s + m.run, 0) / others.length : 0;
+    const head = PART_LABEL[part] + " is " + pct(partMin[part]) + "%" + load + worthTxt(worth) + ", and runs on " + k + " (" + ms.map(m => m.name).join(", ") + "). ";
+    if (worth >= k + 0.75) advice.push(head + "Each of them carries " + hrs(each) + " against " + hrs(oAvg) + " average on the other machines. Putting it on " + (Math.round(worth) - k > 1 ? (Math.round(worth) - k) + " more machines" : "one more machine") + " would finish the whole load sooner.");
+    else if (worth <= k - 0.75) advice.push(head + "That is light for " + k + " fixed machine" + (k > 1 ? "s" : "") + ": each carries " + hrs(each) + " against " + hrs(oAvg) + " average on the others. " + (k > 1 ? "One of them" : "It") + " could be released for other change parts.");
     else advice.push(head + "The fixed set-up fits today's load.");
   }
   for (const r of partRows) if (!installed.has(r.part) && r.worth >= 1) advice.push(PART_LABEL[r.part] + " is " + r.share + "%" + load + worthTxt(r.worth) + ". It is a candidate for its own fixed machine.");
-  return { sec, machines, unallotted, total, avg, partRows, advice, changeovers: machines.reduce((s, m) => s + m.changeovers, 0), allotted: machines.reduce((s, m) => s + m.batches, 0) };
+  return { sec, machines, unallotted, total, totalRun, avg, partRows, advice, changeovers: machines.reduce((s, m) => s + m.changeovers, 0), allotted: machines.reduce((s, m) => s + m.batches, 0) };
 }
-// Classifies every batch, then plans each machine type.
-function planAll(items, cfgs) {
+// ---------- clock ----------
+// Times are whole minutes on a plain calendar (no time zone). Work happens between dayStart and dayEnd, Monday to Saturday.
+const hm = s => { const m = String(s || "").match(/^(\d{1,2}):(\d{2})/); return m ? (+m[1]) * 60 + (+m[2]) : 0; };
+const hrs = min => { min = Math.round(min); const h = Math.floor(min / 60), m = min % 60; return h ? h + " h" + (m ? " " + m + " min" : "") : m + " min"; };
+const fmtClock = t => { const d = new Date(t * 60000), p = n => String(n).padStart(2, "0"); return p(d.getUTCDate()) + "-" + p(d.getUTCMonth() + 1) + "-" + d.getUTCFullYear() + " " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()); };
+const dayName = t => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(t * 60000).getUTCDay()];
+function makeClock(opts) {
+  let ds = hm(opts.dayStart), de = hm(opts.dayEnd);
+  if (de <= ds) { ds = 0; de = 1440; }                     // end not after start means round the clock
+  const mod = t => ((t % 1440) + 1440) % 1440, isSun = t => new Date(t * 60000).getUTCDay() === 0;
+  // First working minute at or after t.
+  const nextWork = t => { for (;;) { const m = mod(t); if (isSun(t)) t += 1440 - m + ds; else if (m < ds) t += ds - m; else if (m >= de) t += 1440 - m + ds; else return t; } };
+  // Adds working minutes (changeovers and gaps), pausing outside working hours.
+  const addWork = (t, mins) => { t = nextWork(t); while (mins > 0) { const left = de - mod(t); if (mins < left) return t + mins; mins -= left; t = nextWork(t + left); } return t; };
+  return { nextWork, addWork };
+}
+// Gives every batch a start and end. A batch starts in working hours and runs until it is done, in overtime if needed.
+// When a machine reaches a change part with no time, that batch and all later ones on that machine get no times.
+function schedulePlan(plan, opts, startMin) {
+  const clock = makeClock(opts);
+  for (const p of plan.sections) for (const m of p.machines) {
+    let cur = startMin, blank = false, first = true; m.finish = null; m.firstStart = null; m.untimed = 0; m.changeMin = 0;
+    for (const g of m.groups) for (const it of g.items) {
+      if (it.changeover === "CHANGEOVER" || it.changeover === "First set-up") { if (!blank) cur = clock.addWork(cur, opts.changeover); m.changeMin += opts.changeover; }
+      else if (!first && !blank) cur = clock.addWork(cur, opts.gap);
+      first = false;
+      if (!it.timed) blank = true;
+      if (blank) { it.start = ""; it.end = ""; m.untimed++; continue; }
+      const s = clock.nextWork(cur); it.startMin = s; it.endMin = s + it.min; it.start = fmtClock(s); it.end = fmtClock(it.endMin); cur = it.endMin;
+      if (m.firstStart == null) m.firstStart = s; m.finish = it.endMin;
+    }
+  }
+  return plan;
+}
+// Classifies every batch, plans each machine type, then puts the clock on it.
+function planAll(items, cfgs, opts, startMin) {
+  opts = opts || SCHED_DEFAULT;
   const byType = { ALU: [], BLISTER: [], STRIP: [] }, unallotted = []; let skipped = 0;
   for (const it of items) {
     const c = classify(it);
@@ -686,15 +748,44 @@ function planAll(items, cfgs) {
     if (c.un) { unallotted.push({ ...it, type: c.type, reason: c.un }); continue; }
     it.type = c.type; it.part = c.part; it.note = c.note; byType[c.type].push(it);
   }
-  const sections = SECTIONS.map(sec => planSection(sec, byType[sec.id], cfgs[sec.id]));
+  const sections = SECTIONS.map(sec => planSection(sec, byType[sec.id], cfgs[sec.id], opts));
   for (const p of sections) unallotted.push(...p.unallotted);
-  return { sections, unallotted, skipped, allotted: sections.reduce((s, p) => s + p.allotted, 0), changeovers: sections.reduce((s, p) => s + p.changeovers, 0) };
+  const plan = { sections, unallotted, skipped, allotted: sections.reduce((s, p) => s + p.allotted, 0), changeovers: sections.reduce((s, p) => s + p.changeovers, 0) };
+  if (startMin != null) schedulePlan(plan, opts, startMin);
+  return plan;
 }
-
 // ---------- plan UI ----------
 const machineCfgs = Object.fromEntries(SECTIONS.map(sec => [sec.id, loadMachines(sec)]));
 const TYPE_TITLE = { ALU: "ALU-ALU", BLISTER: "Blister", STRIP: "Strip", "": "" };
 let planItems = null;
+function loadSched() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SCHED_KEY) || "null"), ok = v => /^\d{1,2}:\d{2}$/.test(v || "");
+    if (s && ok(s.dayStart) && ok(s.dayEnd)) return { dayStart: s.dayStart, dayEnd: s.dayEnd, changeover: Math.max(0, Math.round(+s.changeover || 0)), gap: Math.max(0, Math.round(+s.gap || 0)) };
+  } catch (e) {}
+  return { ...SCHED_DEFAULT };
+}
+let sched = loadSched();
+function defaultStartDate() { const d = new Date(), p = n => String(n).padStart(2, "0"); if (d.getDay() === 0) d.setDate(d.getDate() + 1); return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()); }
+const schedStart = { date: defaultStartDate(), time: sched.dayStart };
+function startMinOf() {
+  const m = String(schedStart.date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) / 60000 + hm(schedStart.time) : null;
+}
+function renderSchedSetup() {
+  $("schedSetup").innerHTML = '<div class="schedBox"><b>Schedule</b>'
+    + '<div class="schedRow"><label>Plan starts on <input type="date" id="sDate" value="' + esc(schedStart.date) + '"></label><label>at <input type="time" id="sTime" value="' + esc(schedStart.time) + '"></label></div>'
+    + '<div class="schedRow"><label>Working hours from <input type="time" id="sFrom" value="' + esc(sched.dayStart) + '"></label><label>to <input type="time" id="sTo" value="' + esc(sched.dayEnd) + '"></label>'
+    + '<label>Changeover <input type="number" id="sCo" min="0" step="5" value="' + sched.changeover + '"> min</label><label>Gap between batches <input type="number" id="sGap" min="0" step="5" value="' + sched.gap + '"> min</label></div>'
+    + '<div class="hint">Every machine starts at the date and time above. Sundays are off. A batch still running when the day ends is finished in overtime, and the next one starts on the next working day. Time per lakh comes from the production head\'s sheet. When a machine reaches a change part with no time yet, that batch and the ones after it show no times.</div></div>';
+  const upd = () => {
+    schedStart.date = $("sDate").value; schedStart.time = $("sTime").value || sched.dayStart;
+    sched = { dayStart: $("sFrom").value || SCHED_DEFAULT.dayStart, dayEnd: $("sTo").value || SCHED_DEFAULT.dayEnd, changeover: Math.max(0, Math.round(+$("sCo").value || 0)), gap: Math.max(0, Math.round(+$("sGap").value || 0)) };
+    try { localStorage.setItem(SCHED_KEY, JSON.stringify(sched)); } catch (e) {}
+    renderPlan();
+  };
+  ["sDate", "sTime", "sFrom", "sTo", "sCo", "sGap"].forEach(id => $(id).onchange = upd);
+}
 function renderMachineSetup() {
   let h = "";
   for (const sec of SECTIONS) {
@@ -706,7 +797,7 @@ function renderMachineSetup() {
       + cfg.map((m, i) => "<tr><td><b>" + esc(m.name) + '</b></td><td><select data-sec="' + sec.id + '" data-i="' + i + '" class="mpart">' + opts(m.part) + '</select></td><td><input type="checkbox" class="mfix" data-sec="' + sec.id + '" data-i="' + i + '"' + (m.fixed ? " checked" : "") + (m.part ? "" : " disabled") + "></td></tr>").join("")
       + '</table><div class="hint"><a href="#" class="mreset" data-sec="' + sec.id + '">' + sec.resetText + "</a></div></details>";
   }
-  h += '<div class="hint">Fixed means the machine only ever runs that change part. Not fixed means it starts on that change part and can change over afterwards. Choices are remembered on this computer.</div>';
+  h += '<div class="hint">Fixed means the machine only ever runs that change part. Not fixed means it starts on that change part and can change over afterwards. A machine left on Auto needs a first set-up, which takes one changeover. Choices are remembered on this computer.</div>';
   const openNow = {}; $("machineSetup").querySelectorAll("details.setupBox").forEach(d => openNow[d.dataset.sec] = d.open);
   $("machineSetup").innerHTML = h;
   $("machineSetup").querySelectorAll("details.setupBox").forEach(d => { if (d.dataset.sec in openNow) d.open = openNow[d.dataset.sec]; });
@@ -715,29 +806,34 @@ function renderMachineSetup() {
   $("machineSetup").querySelectorAll(".mfix").forEach(c => c.onchange = () => { machineCfgs[c.dataset.sec][+c.dataset.i].fixed = c.checked; saveMachines(secOf(c.dataset.sec), machineCfgs[c.dataset.sec]); renderMachineSetup(); renderPlan(); });
   $("machineSetup").querySelectorAll(".mreset").forEach(a => a.onclick = e => { e.preventDefault(); const sec = secOf(a.dataset.sec); machineCfgs[sec.id] = sec.defaults.map(m => ({ ...m })); saveMachines(sec, machineCfgs[sec.id]); renderMachineSetup(); renderPlan(); });
 }
+const coTxt = (it, opts) => it.changeover === "CHANGEOVER" || it.changeover === "First set-up" ? it.changeover + " (" + hrs(opts.changeover) + ")" : it.changeover;
+const runTxt = it => it.timed ? hrs(it.min) : "time not given";
+const finishTxt = m => !m.batches ? "" : (m.finish != null ? dayName(m.finish) + " " + fmtClock(m.finish) : "time not given") + (m.untimed && m.finish != null ? ", then " + m.untimed + " without time" : "");
 function planWorkbook(plan) {
-  const wb = XLSX.utils.book_new(), day = stamp();
-  const sum = [["PRIMARY PACKING MACHINE PLAN", day], ["Load is counted in tablets/capsules. Only batches whose carton and foil are ready are planned."]];
+  const wb = XLSX.utils.book_new(), day = stamp(), o = plan.opts, st = plan.startMin;
+  const sum = [["PRIMARY PACKING MACHINE PLAN", day],
+    ["Plan starts", st != null ? dayName(st) + " " + fmtClock(st) : "not set"], ["Working hours", o.dayStart + " to " + o.dayEnd + ", Sundays off"], ["Changeover", hrs(o.changeover)], ["Gap between batches", hrs(o.gap)],
+    ["Run time = quantity x time per lakh for the change part. A batch still running at day end is finished in overtime. Only batches whose carton and foil are ready are planned."]];
   for (const p of plan.sections) {
-    sum.push([], [p.sec.title.toUpperCase()], ["Machine", "Fixed", "Change parts in running order", "Batches", "Tablets/Capsules", "Share of load %", "Changeovers"]);
-    for (const m of p.machines) sum.push([m.name, m.fixed ? "Fixed" : "", m.groups.map(g => PART_LABEL[g.part]).join("  ->  ") || "(nothing to run)", m.batches, m.qty, p.total ? Math.round(m.qty * 1000 / p.total) / 10 : 0, m.changeovers]);
-    sum.push(["TOTAL " + p.sec.title, "", "", p.allotted, p.total, p.total ? 100 : 0, p.changeovers]);
+    sum.push([], [p.sec.title.toUpperCase()], ["Machine", "Fixed", "Change parts in running order", "Batches", "Tablets/Capsules", "Run time", "Changeovers", "First start", "Finishes", "Batches without time"]);
+    for (const m of p.machines) sum.push([m.name, m.fixed ? "Fixed" : "", m.groups.map(g => PART_LABEL[g.part]).join("  ->  ") || "(nothing to run)", m.batches, m.qty, hrs(m.run), m.changeovers, m.firstStart != null ? fmtClock(m.firstStart) : "", m.finish != null ? fmtClock(m.finish) : "", m.untimed || 0]);
+    sum.push(["TOTAL " + p.sec.title, "", "", p.allotted, p.total, hrs(p.totalRun), p.changeovers]);
     if (p.advice.length) { sum.push(["Load check"]); for (const a of p.advice) sum.push([a]); }
-    if (p.partRows.length) { sum.push(["Change part", "Batches", "Tablets/Capsules", "Share of load %", "Machines' worth", "Runs on"]); for (const r of p.partRows) sum.push([PART_LABEL[r.part], r.batches, r.qty, r.share, r.worth, r.on.join(", ")]); }
+    if (p.partRows.length) { sum.push(["Change part", "Batches", "Tablets/Capsules", "Time per lakh", "Run time", "Share of hours %", "Machines' worth", "Runs on"]); for (const r of p.partRows) sum.push([PART_LABEL[r.part], r.batches, r.qty, RATE_MIN[r.part] ? hrs(RATE_MIN[r.part]) : "not given", r.timed ? hrs(r.min) : "not given", r.share, r.worth, r.on.join(", ")]); }
   }
   sum.push([], ["Not allotted (see last sheet)", plan.unallotted.length], ["Bottle or no-foil packs (not for these machines)", plan.skipped]);
-  const ws0 = XLSX.utils.aoa_to_sheet(sum); ws0["!cols"] = [{ wch: 44 }, { wch: 10 }, { wch: 70 }, { wch: 10 }, { wch: 18 }, { wch: 16 }, { wch: 14 }];
+  const ws0 = XLSX.utils.aoa_to_sheet(sum); ws0["!cols"] = [{ wch: 44 }, { wch: 12 }, { wch: 70 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws0, "Summary");
-  const H = ["Seq", "Change part", "Changeover", "Batch", "Brand", "Composition", "Type", "Size", "Pack", "Foil size", "Qty", "Planned date", "Delay", "Carton nos", "Foil issued", "Note", "Actual start", "Actual end", "Remarks"];
-  const W = [5, 40, 18, 11, 28, 60, 8, 20, 9, 14, 9, 17, 16, 10, 10, 40, 12, 12, 20].map(w => ({ wch: w }));
-  const rowOf = it => [it.seq, PART_LABEL[it.part], it.changeover, it.batch, it.brand, it.comp, it.kind, it.size, it.layout, it.foil, it.qty, it.planned, it.delay, it.carton, it.foilIssued, it.note, "", "", ""];
-  const all = [["Machine"].concat(H.slice(0, 16))];
+  const H = ["Seq", "Change part", "Changeover", "Planned start", "Planned end", "Run time", "Batch", "Brand", "Composition", "Type", "Size", "Pack", "Foil size", "Qty", "FMS planned date", "Delay", "Carton nos", "Foil issued", "Note", "Actual start", "Actual end", "Remarks"];
+  const W = [5, 40, 22, 17, 17, 12, 11, 28, 60, 8, 20, 9, 14, 9, 17, 16, 10, 10, 40, 14, 14, 20].map(w => ({ wch: w }));
+  const rowOf = it => [it.seq, PART_LABEL[it.part], coTxt(it, o), it.start, it.end, runTxt(it), it.batch, it.brand, it.comp, it.kind, it.size, it.layout, it.foil, it.qty, it.planned, it.delay, it.carton, it.foilIssued, it.note, "", "", ""];
+  const all = [["Machine"].concat(H.slice(0, 19))];
   for (const p of plan.sections) for (const m of p.machines) {
-    const rows = [H]; for (const g of m.groups) for (const it of g.items) { rows.push(rowOf(it)); all.push([m.name].concat(rowOf(it).slice(0, 16))); }
+    const rows = [H]; for (const g of m.groups) for (const it of g.items) { rows.push(rowOf(it)); all.push([m.name].concat(rowOf(it).slice(0, 19))); }
     const ws = XLSX.utils.aoa_to_sheet(rows); ws["!cols"] = W; XLSX.utils.book_append_sheet(wb, ws, m.name);
   }
-  const wsA = XLSX.utils.aoa_to_sheet(all); wsA["!cols"] = [{ wch: 11 }].concat(W.slice(0, 16)); XLSX.utils.book_append_sheet(wb, wsA, "All planned");
-  const un = [["Reason", "Machine type", "Batch", "Brand", "Composition", "Type", "Size", "Pack", "Foil size", "Qty", "Planned date", "Delay"]];
+  const wsA = XLSX.utils.aoa_to_sheet(all); wsA["!cols"] = [{ wch: 11 }].concat(W.slice(0, 19)); XLSX.utils.book_append_sheet(wb, wsA, "All planned");
+  const un = [["Reason", "Machine type", "Batch", "Brand", "Composition", "Type", "Size", "Pack", "Foil size", "Qty", "FMS planned date", "Delay"]];
   for (const it of plan.unallotted) un.push([it.reason, TYPE_TITLE[it.type || ""], it.batch, it.brand, it.comp, it.kind, it.size, it.layout, it.foil, it.qty, it.planned, it.delay]);
   const wsU = XLSX.utils.aoa_to_sheet(un); wsU["!cols"] = [{ wch: 64 }, { wch: 12 }, { wch: 11 }, { wch: 28 }, { wch: 60 }, { wch: 8 }, { wch: 20 }, { wch: 9 }, { wch: 14 }, { wch: 9 }, { wch: 17 }, { wch: 16 }];
   XLSX.utils.book_append_sheet(wb, wsU, "Not allotted");
@@ -746,20 +842,22 @@ function planWorkbook(plan) {
 function renderPlan() {
   const out = $("planOut");
   if (!planItems) { out.innerHTML = '<div class="status">Run the match first. The plan appears here.</div>'; return; }
-  const plan = planAll(planItems.map(x => ({ ...x })), machineCfgs); window.lastPlan = plan;
+  const plan = planAll(planItems.map(x => ({ ...x })), machineCfgs, sched, startMinOf()); plan.opts = sched; plan.startMin = startMinOf(); window.lastPlan = plan;
   if (!plan.allotted && !plan.unallotted.length) { out.innerHTML = '<div class="status">No batches to plan in the matched list.</div>'; return; }
   const fname = "MACHINE PLAN " + stamp() + ".xlsx";
-  let h = '<div><button class="dl" id="planDl">Download ' + fname + '</button></div><div class="hint">One sheet per machine, plus Summary, All planned and Not allotted. Planned: ' + plan.allotted + " batches with " + plan.changeovers + " changeovers. Not allotted: " + plan.unallotted.length + ". Bottle or no-foil packs left out: " + plan.skipped + ".</div>";
+  const noTime = plan.sections.reduce((s, p) => s + p.machines.reduce((t, m) => t + (m.untimed || 0), 0), 0);
+  let h = '<div><button class="dl" id="planDl">Download ' + fname + '</button></div><div class="hint">One sheet per machine with start and end times, plus Summary, All planned and Not allotted. Planned: ' + plan.allotted + " batches with " + plan.changeovers + " changeovers. Without a time yet: " + noTime + ". Not allotted: " + plan.unallotted.length + ". Bottle or no-foil packs left out: " + plan.skipped + ".</div>";
+  if (plan.startMin == null) h += '<div class="status"><span class="err">Pick a start date above to get start and end times.</span></div>';
   for (const p of plan.sections) {
-    h += '<h3 class="sech">' + p.sec.title + ' <span class="muted">' + p.allotted + " batches, " + fmtN(p.total) + "</span></h3>";
+    h += '<h3 class="sech">' + p.sec.title + ' <span class="muted">' + p.allotted + " batches, " + fmtN(p.total) + ", " + hrs(p.totalRun) + " running</span></h3>";
     if (!p.allotted) { h += '<div class="muted">No ready ' + p.sec.title + " batches today.</div>"; continue; }
-    h += "<table><tr><th>Machine</th><th>Change parts, in running order</th><th>Batches</th><th>Tablets/Capsules</th><th>Share</th><th>Changeovers</th></tr>";
-    for (const m of p.machines) h += "<tr><td><b>" + esc(m.name) + "</b>" + (m.fixed ? ' <span class="tag">fixed</span>' : "") + "</td><td>" + (m.groups.map(g => esc(PART_LABEL[g.part]) + ' <span class="muted">(' + g.items.length + ")</span>").join(" &rarr; ") || '<span class="muted">nothing to run</span>') + '</td><td class="n">' + m.batches + '</td><td class="n">' + fmtN(m.qty) + '</td><td class="n">' + (p.total ? Math.round(m.qty * 1000 / p.total) / 10 : 0) + '%</td><td class="n">' + m.changeovers + "</td></tr>";
-    h += '<tr><td><b>Total</b></td><td></td><td class="n"><b>' + p.allotted + '</b></td><td class="n"><b>' + fmtN(p.total) + '</b></td><td class="n">100%</td><td class="n"><b>' + p.changeovers + "</b></td></tr></table>";
+    h += "<table><tr><th>Machine</th><th>Change parts, in running order</th><th>Batches</th><th>Tablets/Capsules</th><th>Run time</th><th>Changeovers</th><th>Finishes</th></tr>";
+    for (const m of p.machines) h += "<tr><td><b>" + esc(m.name) + "</b>" + (m.fixed ? ' <span class="tag">fixed</span>' : "") + "</td><td>" + (m.groups.map(g => esc(PART_LABEL[g.part]) + ' <span class="muted">(' + g.items.length + ")</span>").join(" &rarr; ") || '<span class="muted">nothing to run</span>') + '</td><td class="n">' + m.batches + '</td><td class="n">' + fmtN(m.qty) + '</td><td class="n">' + (m.batches ? hrs(m.run) : "") + '</td><td class="n">' + m.changeovers + "</td><td>" + esc(finishTxt(m)) + "</td></tr>";
+    h += '<tr><td><b>Total</b></td><td></td><td class="n"><b>' + p.allotted + '</b></td><td class="n"><b>' + fmtN(p.total) + '</b></td><td class="n"><b>' + hrs(p.totalRun) + '</b></td><td class="n"><b>' + p.changeovers + "</b></td><td></td></tr></table>";
     if (p.advice.length) h += '<div class="advice"><b>Load check</b><ul>' + p.advice.map(a => "<li>" + esc(a) + "</li>").join("") + "</ul></div>";
     for (const m of p.machines) if (m.batches) {
-      h += "<details><summary>" + esc(m.name) + ": " + m.batches + " batches, " + fmtN(m.qty) + '</summary><div class="flags"><table><tr><th>#</th><th>Change part</th><th>Batch</th><th>Brand</th><th>Qty</th><th>Size</th><th>Pack</th><th>Foil</th><th>Planned</th><th>Note</th></tr>';
-      for (const g of m.groups) for (const it of g.items) h += "<tr" + (it.changeover === "CHANGEOVER" ? ' class="co"' : "") + "><td>" + it.seq + "</td><td>" + (it.changeover ? "<b>" + esc(PART_LABEL[it.part]) + '</b><br><span class="muted">' + esc(it.changeover) + "</span>" : "") + "</td><td>" + esc(it.batch) + "</td><td>" + esc(it.brand) + '</td><td class="n">' + fmtN(it.qty) + "</td><td>" + esc(it.size) + "</td><td>" + esc(it.layout) + "</td><td>" + esc(it.foil) + "</td><td>" + esc(it.planned.slice(0, 10)) + "</td><td>" + esc(it.note) + "</td></tr>";
+      h += "<details><summary>" + esc(m.name) + ": " + m.batches + " batches, " + hrs(m.run) + " running" + (m.finish != null ? ", finishes " + esc(dayName(m.finish) + " " + fmtClock(m.finish)) : "") + '</summary><div class="flags"><table><tr><th>#</th><th>Change part</th><th>Start</th><th>End</th><th>Run</th><th>Batch</th><th>Brand</th><th>Qty</th><th>Size</th><th>Pack</th><th>Foil</th><th>Note</th></tr>';
+      for (const g of m.groups) for (const it of g.items) h += "<tr" + (it.changeover === "CHANGEOVER" ? ' class="co"' : "") + "><td>" + it.seq + "</td><td>" + (it.changeover ? "<b>" + esc(PART_LABEL[it.part]) + '</b><br><span class="muted">' + esc(coTxt(it, sched)) + "</span>" : "") + '</td><td class="t">' + (it.start ? esc(dayName(it.startMin) + " " + it.start) : "") + '</td><td class="t">' + (it.end ? esc(dayName(it.endMin) + " " + it.end) : "") + '</td><td class="t">' + esc(runTxt(it)) + "</td><td>" + esc(it.batch) + "</td><td>" + esc(it.brand) + '</td><td class="n">' + fmtN(it.qty) + "</td><td>" + esc(it.size) + "</td><td>" + esc(it.layout) + "</td><td>" + esc(it.foil) + "</td><td>" + esc(it.note) + "</td></tr>";
       h += "</table></div></details>";
     }
   }
@@ -775,15 +873,16 @@ function setPlanFromResults(results) {
   planItems = results.flatMap(r => itemsFromRows(r.label, r.rows));
   renderPlan();
 }
-renderMachineSetup(); renderPlan();
-// For automated testing: plan straight from raw FMS CSV text, skipping the sheet match.
-window.planFromText = (t, c, cfgs) => {
+renderSchedSetup(); renderMachineSetup(); renderPlan();
+// For automated testing: plan straight from raw FMS CSV text, skipping the sheet match. start is "YYYY-MM-DD HH:MM".
+window.planFromText = (t, c, cfgs, opts, start) => {
   const items = [];
   for (const [txt, kind] of [[t, "Tablet"], [c, "Capsule"]]) if (txt) { const d = detect("x.csv", txt); items.push(...itemsFromRows(kind, [d.hdr].concat(d.rows))); }
   const full = Object.fromEntries(SECTIONS.map(s => [s.id, (cfgs && cfgs[s.id]) || s.defaults]));
-  const plan = planAll(items, full);
-  return { allot: plan.sections.flatMap(p => p.machines.flatMap(m => m.groups.flatMap(g => g.items.map(it => [it.batch, m.name, it.seq, it.part, it.changeover, it.note])))), un: plan.unallotted.map(it => [it.batch, it.reason]), skipped: plan.skipped,
-    machines: plan.sections.flatMap(p => p.machines.map(m => [m.name, m.qty, m.batches, m.changeovers, m.groups.map(g => g.part)])), advice: plan.sections.flatMap(p => p.advice) };
+  const sm = start ? (() => { const m = start.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/); return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) / 60000; })() : null;
+  const plan = planAll(items, full, opts || SCHED_DEFAULT, sm);
+  return { allot: plan.sections.flatMap(p => p.machines.flatMap(m => m.groups.flatMap(g => g.items.map(it => [it.batch, m.name, it.seq, it.part, it.changeover, it.note, it.start || "", it.end || ""])))), un: plan.unallotted.map(it => [it.batch, it.reason]), skipped: plan.skipped,
+    machines: plan.sections.flatMap(p => p.machines.map(m => [m.name, m.qty, m.batches, m.changeovers, m.run, m.finish != null ? fmtClock(m.finish) : "", m.untimed || 0, m.groups.map(g => g.part)])), advice: plan.sections.flatMap(p => p.advice) };
 };
 // For automated testing: window.runWithText(tabletCsvText, capsuleCsvText)
 window.runWithText = async (t, c) => { files.tablet = t ? detect("tablet.csv", t) : null; files.capsule = c ? detect("capsule.csv", c) : null; showSlots(); await run(); return Object.fromEntries(Object.entries(window.lastOutputs).map(([k, v]) => [k, v.length])); };
