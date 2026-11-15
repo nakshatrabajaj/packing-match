@@ -381,7 +381,8 @@ const ALU_PARTS = [
   { id: "P92V",   label: "VLDS/0 SIZE TABS/CAPS - 92MM" },
   { id: "P214",   label: "BIG DIAMOND - 214MM" },
   { id: "POR15",  label: "OFLOXA ROUND - 10X15" },
-  { id: "P166X",  label: "166MM 10X15" }
+  { id: "P166X",  label: "166MM 10X15" },
+  { id: "P167",   label: "167MM iMARK" }
 ];
 const BLISTER_PARTS = [
   { id: "B150C",   label: "CITIRIZINE SIZE - 150MM (Block 02)" },
@@ -439,10 +440,10 @@ const PART_ORDER = Object.fromEntries(ALL_PARTS.map((p, i) => [p.id, i]));
 const FOIL_SAME_AS = { 185: 190, 90: 92, 210: 214 };
 // Near-miss sizes taken as the listed size. Not yet confirmed, so the row carries a note.
 const FOIL_ASSUMED_SAME = { 166: 165, 119: 120 };
-const ALU_WIDTHS = [92, 175, 190, 205, 206, 211, 214, 220, 223, 225];
+const ALU_WIDTHS = [92, 167, 175, 190, 205, 206, 211, 214, 220, 223, 225];
 // Foil widths that only exist on ALU-ALU. Used to flag rows whose composition text says BLISTER or STRIP.
 // 175MM is not in it: there is also a 175MM 10X15 blister part and a 175MM LDS strip part.
-const ALU_ONLY_WIDTHS = [92, 205, 206, 211, 214, 220, 223, 225];
+const ALU_ONLY_WIDTHS = [92, 167, 205, 206, 211, 214, 220, 223, 225];
 const BLISTER_WIDTHS = [120, 125, 150, 165, 170, 180, 195, 200];
 
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -501,6 +502,7 @@ function aluPartFor(it, f) {
   switch (f.w) {
     case 225: part = curve ? "P225Z" : "P225"; ok = isSds; break;
     case 223: part = "P223"; ok = isOflo; break;
+    case 167: part = "P167"; break;
     case 220: part = "POR15"; ok = isOflo && lay === "10X15"; break;
     case 214: part = "P214"; ok = isDia; break;
     case 211: part = lay === "10X15" ? "P211X" : "P211"; ok = isCet; break;
