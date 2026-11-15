@@ -380,7 +380,8 @@ const ALU_PARTS = [
   { id: "P190V",  label: "VLDS/0 SIZE TABS/CAPS - 190MM" },
   { id: "P92V",   label: "VLDS/0 SIZE TABS/CAPS - 92MM" },
   { id: "P214",   label: "BIG DIAMOND - 214MM" },
-  { id: "POR15",  label: "OFLOXA ROUND - 10X15" }
+  { id: "POR15",  label: "OFLOXA ROUND - 10X15" },
+  { id: "P166X",  label: "166MM 10X15" }
 ];
 const BLISTER_PARTS = [
   { id: "B150C",   label: "CITIRIZINE SIZE - 150MM (Block 02)" },
@@ -390,13 +391,13 @@ const BLISTER_PARTS = [
   { id: "B190C",   label: "CITIRIZINE SIZE - 190MM 20 TABS (Block 02)" },
   { id: "B170O",   label: "OFLOXA SIZE - 170MM (Block 02)" },
   { id: "B180O",   label: "OFLOXA SIZE - 180MM 6 TABS (Block 02)" },
-  { id: "B200P",   label: "PARA ROUND - 200MM (Block 02)" },
+  { id: "B200P",   label: "PARA ROUND - 200MM / 205MM (Block 02)" },
   { id: "B150S",   label: "SDS SIZE - 150MM (Block 02)" },
   { id: "B150S3",  label: "SDS/DS - 150MM 3 TABS (Block 02)" },
   { id: "B150S7",  label: "SDS - 150MM 7 TABS (Block 02)" },
   { id: "B150S1",  label: "SDS/DS - 150MM 1 TABS (Block 02)" },
   { id: "B120M",   label: "SDS/DS MAGIC BLISTER - 120MM (Block 02)" },
-  { id: "B170D",   label: "DS SIZE - 170MM (Block 02)" },
+  { id: "B170D",   label: "DS/SDS SIZE - 170MM (Block 02)" },
   { id: "B165D",   label: "DS SIZE - 165MM 5 TAB (Block 03)" },
   { id: "B200L",   label: "SDS/DS (LEAF) - 200MM (Block 03)" },
   { id: "B150K1",  label: "1 SIZE CAPS SDS - 150MM (Block 03)" },
@@ -409,10 +410,11 @@ const BLISTER_PARTS = [
   { id: "B150B",   label: "BOLUS ROUND - 150MM (Block 03)" },
   { id: "B165B",   label: "BOLUS 1X2 - 165MM (Block 03)" },
   { id: "B180D",   label: "DIAMOND - 180MM (Block 03)" },
-  { id: "B175X",   label: "175MM 10X15" }
+  { id: "B175X",   label: "175MM 10X15" },
+  { id: "B125",    label: "125MM 10X10" }
 ];
 const STRIP_PARTS = [
-  { id: "S140",   label: "140MM 10X10 SINGLE STRIP" },
+  { id: "S140",   label: "140MM 10X10 SINGLE STRIP (2 SIZE CAPS)" },
   { id: "S135",   label: "135MM LD 10X10 CETIRIZINE" },
   { id: "S110",   label: "110MM 10X10 2 SIZE CAPSULES" },
   { id: "S120",   label: "120MM 10X10 ORANGE" },
@@ -441,7 +443,7 @@ const ALU_WIDTHS = [92, 175, 190, 205, 206, 211, 214, 220, 223, 225];
 // Foil widths that only exist on ALU-ALU. Used to flag rows whose composition text says BLISTER or STRIP.
 // 175MM is not in it: there is also a 175MM 10X15 blister part and a 175MM LDS strip part.
 const ALU_ONLY_WIDTHS = [92, 205, 206, 211, 214, 220, 223, 225];
-const BLISTER_WIDTHS = [120, 150, 165, 170, 180, 195, 200];
+const BLISTER_WIDTHS = [120, 125, 150, 165, 170, 180, 195, 200];
 
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtN = n => Number(n || 0).toLocaleString("en-IN");
@@ -495,6 +497,7 @@ function aluPartFor(it, f) {
   const isDia = /DIAMOND/.test(size);
   const curve = /CURVE|ZIG|GIG/.test(String(it.comp || "").toUpperCase());
   let part = null, ok = true;
+  if (f.raw === 166) return { part: "P166X", note: tabsOf(lay) === 15 ? "" : unusual(it) };
   switch (f.w) {
     case 225: part = curve ? "P225Z" : "P225"; ok = isSds; break;
     case 223: part = "P223"; ok = isOflo; break;
@@ -517,6 +520,7 @@ function blisterPartFor(it, f) {
   let part = null, ok = true;
   switch (f.w) {
     case 120: part = "B120M"; ok = isSD; break;
+    case 125: part = "B125"; break;
     case 150:
       if (size === "CAP 1") part = "B150K1"; else if (isBolus) part = "B150B"; else if (isCet) part = "B150C";
       else if (isSD) part = tabs === 1 ? "B150S1" : tabs === 3 ? "B150S3" : tabs === 7 ? "B150S7" : "B150S";
@@ -524,7 +528,7 @@ function blisterPartFor(it, f) {
     case 165: part = isBolus ? "B165B" : "B165D"; ok = isBolus || size === "DS"; break;
     case 170:
       if (size === "CAP 0") part = tabs === 4 ? "B170K04" : "B170K0"; else if (/^CAP [12]$/.test(size)) part = "B170K12";
-      else if (isOflo) part = "B170O"; else if (size === "DS") part = "B170D"; else if (size === "LDS") part = tabs === 7 ? "B170L7" : "B170L";
+      else if (isOflo) part = "B170O"; else if (isSD) part = "B170D"; else if (size === "LDS") part = tabs === 7 ? "B170L7" : "B170L";
       break;
     case 175: part = "B175X"; ok = tabs === 15; break;
     case 180:
@@ -533,6 +537,7 @@ function blisterPartFor(it, f) {
     case 190: if (isCet) part = "B190C"; break;
     case 195: part = "B195S"; ok = size === "SDS"; break;
     case 200: if (isPara) part = "B200P"; else if (isCet) part = "B200F"; else if (isSD) part = "B200L"; break;
+    case 205: if (isPara) part = "B200P"; break;
   }
   if (!part) return { part: null, reason: "No blister change part on the list for size " + size + " on foil '" + it.foil + "'" };
   return { part, note: ok ? "" : unusual(it) };
@@ -561,10 +566,11 @@ function classify(it) {
   let type = "", why = "";
   if (f.ld) { type = "STRIP"; if (comp && comp !== "STRIP") why = "Composition says " + comp + ", LD foil is a strip size, planned as strip"; }
   else if (comp === "STRIP" || comp === "BLISTER") {
-    if (f.w != null && ALU_ONLY_WIDTHS.includes(f.w)) return { type: "", un: "Composition says " + comp + " but foil " + it.foil + " is an ALU-ALU size. Check which is right" };
+    // 205MM is an ALU size but also the blister Para Round size, so a blister batch on 205MM is checked against the blister list.
+    if (f.w != null && ALU_ONLY_WIDTHS.includes(f.w) && !(comp === "BLISTER" && f.w === 205)) return { type: "", un: "Composition says " + comp + " but foil " + it.foil + " is an ALU-ALU size. Check which is right" };
     type = comp;
   } else if (comp === "ALU") {
-    if (f.w != null && ALU_WIDTHS.includes(f.w)) type = "ALU";
+    if (f.raw === 166 || (f.w != null && ALU_WIDTHS.includes(f.w))) type = "ALU";
     else if (f.w != null && BLISTER_WIDTHS.includes(f.w)) { type = "BLISTER"; why = "Composition says ALU, foil " + it.foil + " is a blister size, planned as blister"; }
     else return { type: "ALU", un: "Foil size '" + it.foil + "' has no change part on any list" };
   } else {
@@ -575,7 +581,8 @@ function classify(it) {
   }
   const d = type === "ALU" ? aluPartFor(it, f) : type === "BLISTER" ? blisterPartFor(it, f) : stripPartFor(it, f);
   if (!d.part) return { type, un: d.reason };
-  return { type, part: d.part, note: [d.note, f.assumed, why, it.check].filter(Boolean).join("; ") };
+  const assumed = type === "ALU" && f.raw === 166 ? "" : f.assumed;
+  return { type, part: d.part, note: [d.note, assumed, why, it.check].filter(Boolean).join("; ") };
 }
 // Turns matched output rows (header + rows) into plan items.
 function itemsFromRows(kind, table) {
