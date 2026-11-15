@@ -408,7 +408,8 @@ const BLISTER_PARTS = [
   { id: "B170K04", label: "0 SIZE CAPS LDS - 170MM 4 CAPS (Block 03)" },
   { id: "B150B",   label: "BOLUS ROUND - 150MM (Block 03)" },
   { id: "B165B",   label: "BOLUS 1X2 - 165MM (Block 03)" },
-  { id: "B180D",   label: "DIAMOND - 180MM (Block 03)" }
+  { id: "B180D",   label: "DIAMOND - 180MM (Block 03)" },
+  { id: "B175X",   label: "175MM 10X15" }
 ];
 const STRIP_PARTS = [
   { id: "S140",   label: "140MM 10X10 SINGLE STRIP" },
@@ -437,8 +438,9 @@ const FOIL_SAME_AS = { 185: 190, 90: 92, 210: 214 };
 // Near-miss sizes taken as the listed size. Not yet confirmed, so the row carries a note.
 const FOIL_ASSUMED_SAME = { 166: 165, 119: 120 };
 const ALU_WIDTHS = [92, 175, 190, 205, 206, 211, 214, 220, 223, 225];
-// Foil widths that only exist on ALU-ALU. Used to flag rows whose composition text says BLISTER.
-const ALU_ONLY_WIDTHS = [92, 175, 205, 206, 211, 214, 220, 223, 225];
+// Foil widths that only exist on ALU-ALU. Used to flag rows whose composition text says BLISTER or STRIP.
+// 175MM is not in it: there is also a 175MM 10X15 blister part and a 175MM LDS strip part.
+const ALU_ONLY_WIDTHS = [92, 205, 206, 211, 214, 220, 223, 225];
 const BLISTER_WIDTHS = [120, 150, 165, 170, 180, 195, 200];
 
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -524,6 +526,7 @@ function blisterPartFor(it, f) {
       if (size === "CAP 0") part = tabs === 4 ? "B170K04" : "B170K0"; else if (/^CAP [12]$/.test(size)) part = "B170K12";
       else if (isOflo) part = "B170O"; else if (size === "DS") part = "B170D"; else if (size === "LDS") part = tabs === 7 ? "B170L7" : "B170L";
       break;
+    case 175: part = "B175X"; ok = tabs === 15; break;
     case 180:
       if (isCet) { part = tabs === 4 ? "B180C4" : "B180C5"; ok = tabs === 4 || tabs === 5; } else if (isOflo) part = "B180O"; else if (isDia) part = "B180D";
       break;
@@ -568,7 +571,7 @@ function classify(it) {
     // Composition does not say ALU, BLISTER or STRIP. No foil at all means a bottle or loose pack: not for these machines.
     if (f.w == null) return { skip: true };
     if (ALU_ONLY_WIDTHS.includes(f.w)) { type = "ALU"; why = "Pack type not written in composition, allotted by foil size"; }
-    else return { type: "", un: "Pack type is not written in the composition and foil " + it.foil + " is not an ALU-ALU size" };
+    else return { type: "", un: "Pack type is not written in the composition and foil " + it.foil + " does not point to one machine type" };
   }
   const d = type === "ALU" ? aluPartFor(it, f) : type === "BLISTER" ? blisterPartFor(it, f) : stripPartFor(it, f);
   if (!d.part) return { type, un: d.reason };
