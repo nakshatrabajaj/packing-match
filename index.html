@@ -457,7 +457,11 @@ const BLISTER_WIDTHS = [120, 125, 150, 165, 170, 180, 195, 200];
 const RATE_MIN = {
   P166X: 480, P190V: 240, P206: 240, P225: 140, P211: 150, P223: 140, P205: 120, P175C: 120,
   B125: 300, B170L: 180, B150S: 120, B150C: 90, B170D: 120, B170L15: 120, B150S3: 300, B180D: 120, B200P: 120, B180C5: 300, B180C4: 300, B180O: 300,
-  S175: 360, S180V: 300, S140: 240, S150: 240, S130L: 240, S130L6: 300, S110: 240, S120: 360, S180O: 120, S135: 180
+  S175: 360, S180V: 300, S140: 240, S150: 240, S130L: 240, S130L6: 300, S110: 240, S120: 360, S180O: 120, S135: 180,
+  // Second sheet (16 Nov 2026). The 92MM sample part is 8 hours for 0.10 lakh, which is 4800 minutes per lakh.
+  POR15: 120, P92C: 4800, P92S: 4800, P92V: 4800, P214: 120, P211X: 120, P225Z: 150, P190C: 120,
+  B170O: 80, B195S: 140, B165D: 120,
+  S130K0: 240
 };
 const durMin = (qty, rate) => Math.ceil(qty * rate / 100000);
 for (const sec of SECTIONS) { const r = sec.parts.map(p => RATE_MIN[p.id]).filter(Boolean); sec.avgRate = Math.round(r.reduce((a, b) => a + b, 0) / r.length); }
