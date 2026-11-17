@@ -119,6 +119,7 @@
         <p class="hint" style="margin-top:0">Allots the matched batches to the ALU-ALU, Blister and Strip machines by change part, so each machine changes over as little as possible, and gives every batch a start and end time.</p>
         <div id="schedSetup"></div>
         <div id="machineSetup"></div>
+        <div id="woOut"></div>
         <div id="planOut" style="margin-top:14px"></div>
       </div>
     </div>
@@ -128,6 +129,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
 // ---------- CONFIGURATION ----------
 // The PM for Production sheet IDs are NOT stored in this page. They come from the address bar, after the #:
@@ -843,11 +845,171 @@ function planWorkbook(plan) {
   XLSX.utils.book_append_sheet(wb, wsU, "Not allotted");
   return wb;
 }
+// ---------- IoT planned work orders ----------
+// Fills the "planned work orders" template that is downloaded from the IoT software, one row per planned batch.
+// The template carries the software's own lists (machines, products, foil sizes, sizes, pack types), so they are
+// read from the file the user adds and are never stored in this page.
+const kz = s => String(s == null ? "" : s).toUpperCase().replace(/[^A-Z0-9]/g, "");
+const sp = s => String(s == null ? "" : s).replace(/\s+/g, " ").trim().toUpperCase();
+// "NAME (10X10)" or "NAME 10*1*10" -> { base: "NAME", lay: "10X10" }
+const packTail = s => { const m = sp(s).match(/^(.*?)(?:\s+|\s*\()\s*(\d+(?:\s*[X*]\s*\d+)+)\s*\)?$/); return m && m[1].trim() ? { base: m[1].trim(), lay: m[2].replace(/\s+/g, "").replace(/\*/g, "X") } : null; };
+const WO_KEYS = ["machine", "rawMaterial", "woNumber", "part", "op1", "op2", "quantity", "cf:foilSize", "cf:tabletSize", "cf:packagingType", "cycles", "pieces", "remarks"];
+function readTemplate(buf) {
+  const wb = XLSX.read(buf, { type: "array" }), ws = wb.Sheets["Work Orders"];
+  if (!ws) throw new Error('this file has no "Work Orders" sheet. Add the planned work orders template downloaded from the IoT software');
+  const refs = Object.fromEntries(((wb.Workbook && wb.Workbook.Names) || []).map(n => [n.Name, n.Ref]));
+  const list = name => {
+    const ref = refs[name]; if (!ref || ref.indexOf("!") < 0) return [];
+    const sh = wb.Sheets[ref.slice(0, ref.lastIndexOf("!")).replace(/^'|'$/g, "")]; if (!sh) return [];
+    const r = XLSX.utils.decode_range(ref.slice(ref.lastIndexOf("!") + 1).replace(/\$/g, "")), out = [];
+    for (let R = r.s.r; R <= r.e.r; R++) for (let C = r.s.c; C <= r.e.c; C++) { const c = sh[XLSX.utils.encode_cell({ r: R, c: C })]; if (c && c.v != null && String(c.v) !== "") out.push(String(c.v)); }
+    return out;
+  };
+  const L = { machines: list("Machines"), parts: list("Parts"), foil: list("CF_foilSize"), size: list("CF_tabletSize"), pack: list("CF_packagingType") };
+  if (!L.machines.length || !L.parts.length) throw new Error("the machine or product list inside this template is empty. Download a fresh template from the IoT software");
+  const meta = wb.Sheets["Meta"] && wb.Sheets["Meta"].A1 ? String(wb.Sheets["Meta"].A1.v).split("|") : WO_KEYS;
+  const cols = {}; for (const k of ["machine", "woNumber", "part", "quantity", "cf:foilSize", "cf:tabletSize", "cf:packagingType", "remarks"]) cols[k] = meta.indexOf(k);
+  if (cols.machine < 0 || cols.part < 0 || cols.quantity < 0) throw new Error("this template has a layout the tool does not know (machine, product or quantity column missing)");
+  let hdrRow = 0; for (let R = 0; R < 12 && !hdrRow; R++) { const c = ws[XLSX.utils.encode_cell({ r: R, c: cols.machine })]; if (c && /^machine/i.test(String(c.v).trim())) hdrRow = R + 1; }
+  if (!hdrRow) throw new Error('the "Work Orders" sheet has no Machine heading');
+  const T = { L, cols, hdrRow, partSp: new Map(), partN: new Map(), partKz: new Map(), partPack: new Map(), partKeys: [] };
+  const push = (m, k, v) => { const a = m.get(k); if (!a) m.set(k, [v]); else if (!a.includes(v)) a.push(v); };
+  for (const p of L.parts) {
+    const s = sp(p); if (!T.partSp.has(s)) T.partSp.set(s, p); T.partN.set(s, (T.partN.get(s) || 0) + 1);
+    push(T.partKz, kz(p), p); T.partKeys.push([kz(p), p]);
+    const t = packTail(p); if (t) push(T.partPack, kz(t.base) + "|" + t.lay, p);
+  }
+  return T;
+}
+// Finds the IoT product name for an FMS brand name. Returns how it matched: exact, spelling (only punctuation or
+// spacing differs), pack (the pack size is written in one name and not the other), or "" when it is not in the list.
+function matchProduct(it, T) {
+  const a = sp(it.brand), k = kz(a), one = c => c && c.length === 1 ? c[0] : null;
+  if (T.partSp.has(a)) return { name: T.partSp.get(a), how: "exact", dup: T.partN.get(a) > 1 };
+  let n = one(T.partKz.get(k)); if (n) return { name: n, how: "spelling" };
+  n = it.layout ? one(T.partPack.get(k + "|" + it.layout)) : null; if (n) return { name: n, how: "pack" };
+  const t = packTail(a);
+  if (t) { n = T.partSp.get(t.base) || one(T.partKz.get(kz(t.base))); if (n) return { name: n, how: "pack" }; }
+  const base = kz(t ? t.base : a), sugg = [];
+  if (base.length >= 5) for (const [pk, p] of T.partKeys) { if ((pk.startsWith(base) || (pk.length >= 5 && base.startsWith(pk))) && !sugg.includes(p)) sugg.push(p); if (sugg.length === 3) break; }
+  return { name: "", how: "", sugg };
+}
+const pickList = (list, v) => { const s = sp(v), k = kz(v); if (!k) return ""; return list.find(x => sp(x) === s) || list.find(x => kz(x) === k) || ""; };
+function sizeFor(it, T) {
+  if (it.kind === "Capsule") return pickList(T.L.size, "SIZE " + it.size.replace(/^CAP\s*/, ""));
+  const v = pickList(T.L.size, it.size); if (v || !kz(it.size)) return v;
+  // Same letters in a different order: catches a spelling slip inside the IoT list, such as SQAURE for SQUARE.
+  const srt = x => kz(x).split("").sort().join(""), c = T.L.size.filter(x => srt(x) === srt(it.size));
+  return c.length === 1 ? c[0] : "";
+}
+function machineFor(name, T) {
+  const k = kz(name.replace(/^ALU /, "ALU ALU "));
+  return T.L.machines.find(x => kz(x.split("—")[0]) === k) || T.L.machines.find(x => kz(x) === k) || "";
+}
+// One row per planned batch, machine by machine in running order.
+function workOrderRows(plan, T) {
+  const rows = [], st = { rows: 0, exact: 0, near: 0, missing: 0, checks: 0 };
+  for (const p of plan.sections) for (const m of p.machines) {
+    const mach = machineFor(m.name, T);
+    for (const g of m.groups) for (const it of g.items) {
+      const pm = matchProduct(it, T), foil = pickList(T.L.foil, it.foil), size = sizeFor(it, T), pack = pickList(T.L.pack, it.type), checks = [];
+      if (!mach) checks.push("Machine " + m.name + " is not in the IoT machine list");
+      if (pm.how === "spelling") checks.push("Spelling differs from FMS, matched to the IoT name");
+      else if (pm.how === "pack") checks.push("Matched to the IoT name that differs only by the pack size");
+      else if (!pm.how) checks.push("Product is not in the IoT product list" + (pm.sugg && pm.sugg.length ? ". Closest: " + pm.sugg.join(", ") : ""));
+      if (pm.dup) checks.push("Two products with this name in the IoT list, check the customer after upload");
+      if (!foil && kz(it.foil)) checks.push("Foil size " + sp(it.foil) + " is not in the IoT list, left blank");
+      if (!size && kz(it.size)) checks.push("Size " + sp(it.size) + " is not in the IoT list, left blank");
+      if (!it.qty) checks.push("Quantity is missing");
+      const remarks = ["Seq " + it.seq, it.start ? "Start " + it.start : "Time not given", it.start ? "End " + it.end : "", PART_LABEL[it.part], it.changeover === "CHANGEOVER" || it.changeover === "First set-up" ? it.changeover + " before this batch" : ""].filter(Boolean).join(" | ");
+      rows.push({ machine: mach || m.name, mname: m.name, batch: it.batch, fms: sp(it.brand), product: pm.name || String(it.brand).trim(), how: pm.how, qty: it.qty, foil, size, pack, remarks, checks });
+      st.rows++; st[pm.how === "exact" ? "exact" : pm.how ? "near" : "missing"]++; if (checks.length) st.checks++;
+    }
+  }
+  return { rows, st };
+}
+const xmlEsc = s => String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const xmlUn = s => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d)).replace(/&amp;/g, "&");
+// Writes the rows into a copy of the template. Only the Work Orders sheet and the text table are touched, so the
+// hidden lists, the dropdowns and the Meta sheet reach the IoT software exactly as it made them.
+async function fillTemplate(buf, T, rows) {
+  const zip = await JSZip.loadAsync(buf), txt = async p => { const f = zip.file(p); if (!f) throw new Error("template part missing: " + p); return f.async("string"); };
+  const attr = (tag, a) => { const m = tag.match(new RegExp('\\s' + a + '="([^"]*)"')); return m ? xmlUn(m[1]) : ""; };
+  const sheetTag = ((await txt("xl/workbook.xml")).match(/<sheet\b[^>]*>/g) || []).find(t => attr(t, "name") === "Work Orders");
+  const rels = (await txt("xl/_rels/workbook.xml.rels")).match(/<Relationship\b[^>]*>/g) || [];
+  const target = t => t.startsWith("/") ? t.slice(1) : "xl/" + t;
+  const sheetRel = sheetTag && rels.find(r => attr(r, "Id") === attr(sheetTag, "r:id")), sstRel = rels.find(r => /\/sharedStrings$/.test(attr(r, "Type")));
+  if (!sheetRel || !sstRel) throw new Error("template layout not recognised");
+  const sheetPath = target(attr(sheetRel, "Target")), sstPath = target(attr(sstRel, "Target"));
+  let sst = await txt(sstPath), xml = await txt(sheetPath);
+  // Text cells point into the workbook's text table: reuse a text that is already there, add the ones that are not.
+  const have = new Map(), items = sst.match(/<si\/>|<si>[\s\S]*?<\/si>/g) || [], added = []; let used = 0;
+  items.forEach((x, i) => { const m = x.match(/^<si><t(?:\s[^>]*)?>([\s\S]*?)<\/t><\/si>$/); if (m) { const v = xmlUn(m[1]); if (!have.has(v)) have.set(v, i); } });
+  const sidx = v => { used++; if (!have.has(v)) { have.set(v, items.length + added.length); added.push('<si><t xml:space="preserve">' + xmlEsc(v) + "</t></si>"); } return have.get(v); };
+  const c = T.cols, order = [["machine", "machine"], ["woNumber", "batch"], ["part", "product"], ["quantity", "qty"], ["cf:foilSize", "foil"], ["cf:tabletSize", "size"], ["cf:packagingType", "pack"], ["remarks", "remarks"]].filter(x => c[x[0]] >= 0).sort((a, b) => c[a[0]] - c[b[0]]);
+  const first = T.hdrRow + 1, last = T.hdrRow + rows.length;
+  const rowXml = rows.map((r, i) => {
+    const R = first + i; let cells = "";
+    for (const [k, f] of order) {
+      const v = r[f], ref = XLSX.utils.encode_col(c[k]) + R; if (v === "" || v == null) continue;
+      cells += f === "qty" ? '<c r="' + ref + '"><v>' + Number(v) + "</v></c>" : '<c r="' + ref + '" t="s"><v>' + sidx(String(v)) + "</v></c>";
+    }
+    return '<row r="' + R + '">' + cells + "</row>";
+  }).join("");
+  const sd = xml.match(/<sheetData>([\s\S]*?)<\/sheetData>/); if (!sd) throw new Error("template sheet is empty");
+  const keep = (sd[1].match(/<row\b[^>]*?\/>|<row\b[^>]*>[\s\S]*?<\/row>/g) || []).filter(r => +attr(r.match(/<row\b[^>]*>/)[0], "r") <= T.hdrRow).join("");
+  xml = xml.replace(sd[0], () => "<sheetData>" + keep + rowXml + "</sheetData>");
+  // The dropdowns and the sheet size stretch when the plan is longer than the blank rows of the template.
+  xml = xml.replace(/sqref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/g, (m, a, r1, b, r2) => +r2 < last ? 'sqref="' + a + r1 + ":" + b + last + '"' : m);
+  xml = xml.replace(/<dimension ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\/>/, (m, a, r1, b, r2) => '<dimension ref="' + a + r1 + ":" + b + Math.max(+r2, last) + '"/>');
+  sst = sst.replace(/<sst\b[^>]*>/, h => h.replace(/\scount="(\d+)"/, (m, n) => ' count="' + (+n + used) + '"').replace(/\suniqueCount="(\d+)"/, (m, n) => ' uniqueCount="' + (+n + added.length) + '"')).replace(/<\/sst>\s*$/, () => added.join("") + "</sst>");
+  zip.file(sheetPath, xml); zip.file(sstPath, sst);
+  return zip.generateAsync({ type: "blob", compression: "DEFLATE", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+// The template is remembered in this browser, so it is added once and replaced only when the IoT lists change.
+const idb = (mode, fn) => new Promise((res, rej) => { try { const o = indexedDB.open("pm_iot_v1", 1); o.onupgradeneeded = () => o.result.createObjectStore("kv"); o.onerror = () => rej(o.error); o.onsuccess = () => { const tx = o.result.transaction("kv", mode), rq = fn(tx.objectStore("kv")); tx.oncomplete = () => res(rq.result); tx.onerror = () => rej(tx.error); }; } catch (e) { rej(e); } });
+let woTpl = null, woErr = "";
+function setTemplate(name, buf, savedAt, store) {
+  const T = readTemplate(buf); woTpl = { name, buf, savedAt, T }; woErr = "";
+  if (store) idb("readwrite", s => s.put({ name, buf, savedAt }, "template")).catch(() => {});
+}
+function saveBlob(name, blob) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
+function renderWO() {
+  const el = $("woOut"); if (!el) return;
+  const plan = window.lastPlan, fname = "PLANNED WORK ORDERS " + stamp() + ".xlsx";
+  let h = '<div class="schedBox"><b>IoT work orders file</b><div class="hint" style="margin-top:2px">The same plan in the upload format of the IoT software: one row per batch with machine, batch number, product, quantity, foil size, size and pack type. Start and end times go in Remarks.</div>';
+  if (woErr) h += '<div class="status"><span class="err">' + esc(woErr) + "</span></div>";
+  if (!woTpl) h += '<div class="status">Add the planned work orders template downloaded from the IoT software. It is remembered on this computer.</div><button class="dl" id="woPick">Add template file</button>';
+  else {
+    h += '<div class="hint">Template in use: <b>' + esc(woTpl.name) + "</b>, added " + esc(woTpl.savedAt) + ", " + fmtN(woTpl.T.L.parts.length) + " products and " + woTpl.T.L.machines.length + ' machines. Download a fresh one from the IoT software when new products are added there.</div><button class="dl" id="woPick">Replace template file</button>';
+    if (plan && plan.allotted) {
+      const wo = workOrderRows(plan, woTpl.T); window.lastWO = wo;
+      h += '<button class="dl" id="woDl">Download ' + fname + '</button><div class="hint">' + wo.st.rows + " rows. Product names: " + wo.st.exact + " exact, " + wo.st.near + " matched by close spelling, " + wo.st.missing + " not in the IoT product list.</div>";
+      const chk = wo.rows.filter(r => r.checks.length).sort((a, b) => (a.how ? 1 : 0) - (b.how ? 1 : 0));   // products missing from the IoT list come first
+      if (chk.length) {
+        h += "<details" + (wo.st.missing ? " open" : "") + "><summary>Rows to check before upload (" + chk.length + ')</summary><div class="flags"><table><tr><th>Batch</th><th>Machine</th><th>FMS product name</th><th>Written in the file</th><th>Check</th></tr>';
+        for (const r of chk) h += "<tr><td>" + esc(r.batch) + "</td><td>" + esc(r.mname) + "</td><td>" + esc(r.fms) + "</td><td>" + esc(r.product) + "</td><td>" + esc(r.checks.join("; ")) + "</td></tr>";
+        h += "</table></div></details>";
+      }
+    } else h += '<div class="status">Run the match first. The work orders file is made from the plan.</div>';
+  }
+  el.innerHTML = h + '<input type="file" id="woFile" accept=".xlsx" style="display:none"></div>';
+  $("woPick").onclick = () => $("woFile").click();
+  $("woFile").onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try { setTemplate(f.name, await f.arrayBuffer(), stamp(), true); } catch (err) { woErr = f.name + ": " + (err && err.message || err); }
+    renderWO();
+  };
+  if ($("woDl")) $("woDl").onclick = async () => {
+    try { saveBlob(fname, await fillTemplate(woTpl.buf, woTpl.T, window.lastWO.rows)); } catch (err) { woErr = "Could not make the file: " + (err && err.message || err); renderWO(); }
+  };
+}
+idb("readonly", s => s.get("template")).then(rec => { if (rec && rec.buf && !woTpl) { try { setTemplate(rec.name, rec.buf, rec.savedAt, false); renderWO(); } catch (e) {} } }).catch(() => {});
 function renderPlan() {
   const out = $("planOut");
-  if (!planItems) { out.innerHTML = '<div class="status">Run the match first. The plan appears here.</div>'; return; }
+  if (!planItems) { window.lastPlan = null; out.innerHTML = '<div class="status">Run the match first. The plan appears here.</div>'; renderWO(); return; }
   const plan = planAll(planItems.map(x => ({ ...x })), machineCfgs, sched, startMinOf()); plan.opts = sched; plan.startMin = startMinOf(); window.lastPlan = plan;
-  if (!plan.allotted && !plan.unallotted.length) { out.innerHTML = '<div class="status">No batches to plan in the matched list.</div>'; return; }
+  if (!plan.allotted && !plan.unallotted.length) { out.innerHTML = '<div class="status">No batches to plan in the matched list.</div>'; renderWO(); return; }
   const fname = "MACHINE PLAN " + stamp() + ".xlsx";
   const noTime = plan.sections.reduce((s, p) => s + p.machines.reduce((t, m) => t + (m.untimed || 0), 0), 0);
   let h = '<div><button class="dl" id="planDl">Download ' + fname + '</button></div><div class="hint">One sheet per machine with start and end times, plus Summary, All planned and Not allotted. Planned: ' + plan.allotted + " batches with " + plan.changeovers + " changeovers. Without a time yet: " + noTime + ". Not allotted: " + plan.unallotted.length + ". Bottle or no-foil packs left out: " + plan.skipped + ".</div>";
@@ -872,6 +1034,7 @@ function renderPlan() {
   }
   out.innerHTML = h;
   $("planDl").onclick = () => XLSX.writeFile(planWorkbook(plan), fname, { compression: true });
+  renderWO();
 }
 function setPlanFromResults(results) {
   planItems = results.flatMap(r => itemsFromRows(r.label, r.rows));
@@ -887,6 +1050,15 @@ window.planFromText = (t, c, cfgs, opts, start) => {
   const plan = planAll(items, full, opts || SCHED_DEFAULT, sm);
   return { allot: plan.sections.flatMap(p => p.machines.flatMap(m => m.groups.flatMap(g => g.items.map(it => [it.batch, m.name, it.seq, it.part, it.changeover, it.note, it.start || "", it.end || ""])))), un: plan.unallotted.map(it => [it.batch, it.reason]), skipped: plan.skipped,
     machines: plan.sections.flatMap(p => p.machines.map(m => [m.name, m.qty, m.batches, m.changeovers, m.run, m.finish != null ? fmtClock(m.finish) : "", m.untimed || 0, m.groups.map(g => g.part)])), advice: plan.sections.flatMap(p => p.advice) };
+};
+// For automated testing: load a template from a URL, plan from raw CSV text with the page's own settings, return the filled file.
+window.woTest = async (tplUrl, t, c, start) => {
+  setTemplate("template.xlsx", await (await fetch(tplUrl)).arrayBuffer(), stamp(), false);
+  const items = [];
+  for (const [txt, kind] of [[t, "Tablet"], [c, "Capsule"]]) if (txt) { const d = detect("x.csv", txt); items.push(...itemsFromRows(kind, [d.hdr].concat(d.rows))); }
+  planItems = items; if (start) { schedStart.date = start.slice(0, 10); schedStart.time = start.slice(11); }
+  renderPlan();
+  return { st: window.lastWO.st, blob: await fillTemplate(woTpl.buf, woTpl.T, window.lastWO.rows) };
 };
 // For automated testing: window.runWithText(tabletCsvText, capsuleCsvText)
 window.runWithText = async (t, c) => { files.tablet = t ? detect("tablet.csv", t) : null; files.capsule = c ? detect("capsule.csv", c) : null; showSlots(); await run(); return Object.fromEntries(Object.entries(window.lastOutputs).map(([k, v]) => [k, v.length])); };
