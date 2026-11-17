@@ -125,7 +125,7 @@
     </div>
   </div>
 
-  <p class="hint">Rules: exact batch number match. Carton Sent (column I) must be ticked or have a quantity; the word “Pend” does not count. Foil Qty Issued must be filled. Foil Qty Returned must be blank on every row for that batch; a typed 0 counts as filled. Tablets are checked on the TABLET and Beta Lectum tabs, capsules on the CAPSULE tabs, of the PM sheets named in the bookmark. Machine plan: change part is chosen by foil size and tablet or capsule size; LD foil means strip; 185MM, 90MM and 210MM in FMS are treated as the 190MM, 92MM and 214MM change parts; machines are balanced by running hours; each batch gets a start and end from its quantity and the time per lakh of its change part.</p>
+  <p class="hint">Rules: exact batch number match. Carton Sent (column I) must be ticked or have a quantity; the word “Pend” does not count. Foil Qty Issued must be filled. Foil Qty Returned must be blank on every row for that batch; a typed 0 counts as filled. Tablets are checked on the TABLET and Beta Lectum tabs, capsules on the CAPSULE tabs, of the PM sheets named in the bookmark. Machine plan: change part is chosen by foil size and tablet or capsule size; LD foil means strip; 185MM, 90MM and 210MM in FMS are treated as the 190MM, 92MM and 214MM change parts; machines are balanced by running hours; each batch gets a start and end from its quantity and the time per lakh of its change part; batches matched on the Beta Lectum tab are left out of the machine plan.</p>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -624,7 +624,7 @@ function itemsFromRows(kind, table) {
       kind, brand: g(r, "Brand Name"), comp: comp.replace(/\s+/g, " "), batch: g(r, kind === "Tablet" ? "Batch #" : "Batch"),
       qty: qtyOf(g(r, kind === "Tablet" ? "Quantity" : "Qty")), size, layout: lay, foil: g(r, "Foil_Size"),
       planned: g(r, "Planned Date"), pkey: sortableDate(g(r, "Planned Date")), delay: g(r, "Delay"),
-      carton: g(r, "Sheet Carton Nos"), foilIssued: g(r, "Sheet Col P (Foil Qty Issued)"), check: g(r, "Check"), pack: packTypeOf(comp)
+      carton: g(r, "Sheet Carton Nos"), foilIssued: g(r, "Sheet Col P (Foil Qty Issued)"), check: g(r, "Check"), from: g(r, "Matched From"), pack: packTypeOf(comp)
     };
   });
 }
@@ -747,8 +747,10 @@ function schedulePlan(plan, opts, startMin) {
 // Classifies every batch, plans each machine type, then puts the clock on it.
 function planAll(items, cfgs, opts, startMin) {
   opts = opts || SCHED_DEFAULT;
-  const byType = { ALU: [], BLISTER: [], STRIP: [] }, unallotted = []; let skipped = 0;
+  const byType = { ALU: [], BLISTER: [], STRIP: [] }, unallotted = [], beta = []; let skipped = 0;
   for (const it of items) {
+    // Batches matched on the Beta Lectum tab run on the separate beta machines and are planned there, not here.
+    if (/beta/i.test(it.from || "")) { beta.push(it); continue; }
     const c = classify(it);
     if (c.skip) { skipped++; continue; }
     if (c.un) { unallotted.push({ ...it, type: c.type, reason: c.un }); continue; }
@@ -756,7 +758,7 @@ function planAll(items, cfgs, opts, startMin) {
   }
   const sections = SECTIONS.map(sec => planSection(sec, byType[sec.id], cfgs[sec.id], opts));
   for (const p of sections) unallotted.push(...p.unallotted);
-  const plan = { sections, unallotted, skipped, allotted: sections.reduce((s, p) => s + p.allotted, 0), changeovers: sections.reduce((s, p) => s + p.changeovers, 0) };
+  const plan = { sections, unallotted, skipped, beta, allotted: sections.reduce((s, p) => s + p.allotted, 0), changeovers: sections.reduce((s, p) => s + p.changeovers, 0) };
   if (startMin != null) schedulePlan(plan, opts, startMin);
   return plan;
 }
@@ -827,7 +829,7 @@ function planWorkbook(plan) {
     if (p.advice.length) { sum.push(["Load check"]); for (const a of p.advice) sum.push([a]); }
     if (p.partRows.length) { sum.push(["Change part", "Batches", "Tablets/Capsules", "Time per lakh", "Run time", "Share of hours %", "Machines' worth", "Runs on"]); for (const r of p.partRows) sum.push([PART_LABEL[r.part], r.batches, r.qty, RATE_MIN[r.part] ? hrs(RATE_MIN[r.part]) : "not given", r.timed ? hrs(r.min) : "not given", r.share, r.worth, r.on.join(", ")]); }
   }
-  sum.push([], ["Not allotted (see last sheet)", plan.unallotted.length], ["Bottle or no-foil packs (not for these machines)", plan.skipped]);
+  sum.push([], ["Not allotted (see last sheet)", plan.unallotted.length], ["Bottle or no-foil packs (not for these machines)", plan.skipped], ["Beta Lectum batches (planned separately on the beta machines)", plan.beta.length, plan.beta.map(b => b.batch).join(", ")]);
   const ws0 = XLSX.utils.aoa_to_sheet(sum); ws0["!cols"] = [{ wch: 44 }, { wch: 12 }, { wch: 70 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws0, "Summary");
   const H = ["Seq", "Change part", "Changeover", "Planned start", "Planned end", "Run time", "Batch", "Brand", "Composition", "Type", "Size", "Pack", "Foil size", "Qty", "FMS planned date", "Delay", "Carton nos", "Foil issued", "Note", "Actual start", "Actual end", "Remarks"];
@@ -921,7 +923,7 @@ function workOrderRows(plan, T) {
       if (!foil && kz(it.foil)) checks.push("Foil size " + sp(it.foil) + " is not in the IoT list, left blank");
       if (!size && kz(it.size)) checks.push("Size " + sp(it.size) + " is not in the IoT list, left blank");
       if (!it.qty) checks.push("Quantity is missing");
-      const remarks = ["Seq " + it.seq, it.start ? "Start " + it.start : "Time not given", it.start ? "End " + it.end : "", PART_LABEL[it.part], it.changeover === "CHANGEOVER" || it.changeover === "First set-up" ? it.changeover + " before this batch" : ""].filter(Boolean).join(" | ");
+      const remarks = ["Seq " + it.seq, it.start ? "Start " + it.start : "Time not given", it.start ? "End " + it.end : "", it.start ? "Run time " + hrs(it.min) : "", PART_LABEL[it.part], it.changeover === "CHANGEOVER" || it.changeover === "First set-up" ? it.changeover + " before this batch" : ""].filter(Boolean).join(" | ");
       rows.push({ machine: mach || m.name, mname: m.name, batch: it.batch, fms: sp(it.brand), product: pm.name || String(it.brand).trim(), how: pm.how, qty: it.qty, foil, size, pack, remarks, checks });
       st.rows++; st[pm.how === "exact" ? "exact" : pm.how ? "near" : "missing"]++; if (checks.length) st.checks++;
     }
@@ -977,7 +979,7 @@ function saveBlob(name, blob) { const a = document.createElement("a"); a.href = 
 function renderWO() {
   const el = $("woOut"); if (!el) return;
   const plan = window.lastPlan, fname = "PLANNED WORK ORDERS " + stamp() + ".xlsx";
-  let h = '<div class="schedBox"><b>IoT work orders file</b><div class="hint" style="margin-top:2px">The same plan in the upload format of the IoT software: one row per batch with machine, batch number, product, quantity, foil size, size and pack type. Start and end times go in Remarks.</div>';
+  let h = '<div class="schedBox"><b>IoT work orders file</b><div class="hint" style="margin-top:2px">The same plan in the upload format of the IoT software: one row per batch with machine, batch number, product, quantity, foil size, size and pack type. The planned start, end and run time of each batch go in Remarks.</div>';
   if (woErr) h += '<div class="status"><span class="err">' + esc(woErr) + "</span></div>";
   if (!woTpl) h += '<div class="status">Add the planned work orders template downloaded from the IoT software. It is remembered on this computer.</div><button class="dl" id="woPick">Add template file</button>';
   else {
@@ -1009,10 +1011,10 @@ function renderPlan() {
   const out = $("planOut");
   if (!planItems) { window.lastPlan = null; out.innerHTML = '<div class="status">Run the match first. The plan appears here.</div>'; renderWO(); return; }
   const plan = planAll(planItems.map(x => ({ ...x })), machineCfgs, sched, startMinOf()); plan.opts = sched; plan.startMin = startMinOf(); window.lastPlan = plan;
-  if (!plan.allotted && !plan.unallotted.length) { out.innerHTML = '<div class="status">No batches to plan in the matched list.</div>'; renderWO(); return; }
+  if (!plan.allotted && !plan.unallotted.length && !plan.beta.length) { out.innerHTML = '<div class="status">No batches to plan in the matched list.</div>'; renderWO(); return; }
   const fname = "MACHINE PLAN " + stamp() + ".xlsx";
   const noTime = plan.sections.reduce((s, p) => s + p.machines.reduce((t, m) => t + (m.untimed || 0), 0), 0);
-  let h = '<div><button class="dl" id="planDl">Download ' + fname + '</button></div><div class="hint">One sheet per machine with start and end times, plus Summary, All planned and Not allotted. Planned: ' + plan.allotted + " batches with " + plan.changeovers + " changeovers. Without a time yet: " + noTime + ". Not allotted: " + plan.unallotted.length + ". Bottle or no-foil packs left out: " + plan.skipped + ".</div>";
+  let h = '<div><button class="dl" id="planDl">Download ' + fname + '</button></div><div class="hint">One sheet per machine with start and end times, plus Summary, All planned and Not allotted. Planned: ' + plan.allotted + " batches with " + plan.changeovers + " changeovers. Without a time yet: " + noTime + ". Not allotted: " + plan.unallotted.length + ". Bottle or no-foil packs left out: " + plan.skipped + ". Beta Lectum batches left out: " + plan.beta.length + (plan.beta.length ? " (" + esc(plan.beta.map(b => b.batch).join(", ")) + ")" : "") + ".</div>";
   if (plan.startMin == null) h += '<div class="status"><span class="err">Pick a start date above to get start and end times.</span></div>';
   for (const p of plan.sections) {
     h += '<h3 class="sech">' + p.sec.title + ' <span class="muted">' + p.allotted + " batches, " + fmtN(p.total) + ", " + hrs(p.totalRun) + " running</span></h3>";
@@ -1048,7 +1050,7 @@ window.planFromText = (t, c, cfgs, opts, start) => {
   const full = Object.fromEntries(SECTIONS.map(s => [s.id, (cfgs && cfgs[s.id]) || s.defaults]));
   const sm = start ? (() => { const m = start.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/); return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) / 60000; })() : null;
   const plan = planAll(items, full, opts || SCHED_DEFAULT, sm);
-  return { allot: plan.sections.flatMap(p => p.machines.flatMap(m => m.groups.flatMap(g => g.items.map(it => [it.batch, m.name, it.seq, it.part, it.changeover, it.note, it.start || "", it.end || ""])))), un: plan.unallotted.map(it => [it.batch, it.reason]), skipped: plan.skipped,
+  return { allot: plan.sections.flatMap(p => p.machines.flatMap(m => m.groups.flatMap(g => g.items.map(it => [it.batch, m.name, it.seq, it.part, it.changeover, it.note, it.start || "", it.end || ""])))), un: plan.unallotted.map(it => [it.batch, it.reason]), skipped: plan.skipped, beta: plan.beta.map(it => it.batch),
     machines: plan.sections.flatMap(p => p.machines.map(m => [m.name, m.qty, m.batches, m.changeovers, m.run, m.finish != null ? fmtClock(m.finish) : "", m.untimed || 0, m.groups.map(g => g.part)])), advice: plan.sections.flatMap(p => p.advice) };
 };
 // For automated testing: load a template from a URL, plan from raw CSV text with the page's own settings, return the filled file.
