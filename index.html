@@ -463,7 +463,12 @@ const RATE_MIN = {
   // Second sheet (16 Nov 2026). The 92MM sample part is 8 hours for 0.10 lakh, which is 4800 minutes per lakh.
   POR15: 120, P92C: 4800, P92S: 4800, P92V: 4800, P214: 120, P211X: 120, P225Z: 150, P190C: 120,
   B170O: 80, B195S: 140, B165D: 120,
-  S130K0: 240
+  S130K0: 240,
+  // Third sheet (17 Nov 2026). Its "170 MM 10X15" row stands where 175MM 10X15 was asked, so it is used for that part
+  // (LDS - 170MM 10X15 already has the same 2 hours). 1 and 2 size caps on 170MM are one change part, both 2 h 30.
+  P167: 480,
+  B120M: 300, B175X: 120, B190C: 120, B200F: 300, B200L: 150, B150S7: 210, B150S1: 900, B150K1: 120,
+  B170L7: 120, B170K0: 210, B170K12: 150, B170K04: 900, B150B: 1200
 };
 const durMin = (qty, rate) => Math.ceil(qty * rate / 100000);
 for (const sec of SECTIONS) { const r = sec.parts.map(p => RATE_MIN[p.id]).filter(Boolean); sec.avgRate = Math.round(r.reduce((a, b) => a + b, 0) / r.length); }
