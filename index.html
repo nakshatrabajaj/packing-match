@@ -35,6 +35,9 @@
   th { background:#f1f1ee; font-weight:600; }
   td.n { text-align:right; font-variant-numeric:tabular-nums; }
   .big { font-size:26px; font-weight:700; color:var(--ok); }
+  button.numdl { font:inherit; color:inherit; background:none; border:1px solid transparent; border-radius:6px; padding:1px 8px; margin:-2px -9px; cursor:pointer; position:relative; text-decoration:underline dotted; text-underline-offset:4px; }
+  button.numdl:hover, button.numdl:focus-visible { background:#e3edf8; border-color:var(--accent); text-decoration:none; outline:none; }
+  button.numdl:hover::after, button.numdl:focus-visible::after { content:"\2193  Download list"; position:absolute; right:100%; top:50%; transform:translateY(-50%); margin-right:8px; white-space:nowrap; font-size:12px; font-weight:600; color:#fff; background:var(--accent); border-radius:5px; padding:3px 8px; }
   .flags { max-height:320px; overflow:auto; }
   .hint { font-size:13px; color:var(--muted); margin-top:8px; }
   .sheets { font-size:13px; color:var(--muted); margin-top:6px; }
@@ -222,14 +225,23 @@ function indexTab(wb, tab, label) {
 function match(hdr, rows, batchCol, sources) {
   const bi = hdr.indexOf(batchCol), bri = hdr.indexOf("Brand Name");
   const out = [], stats = { match:0, returned:0, notMet:0, notOnSheet:0 }, flags = [];
+  // The rows behind every count in the summary, so each number can be downloaded as its own list.
+  const lists = { total: [], returned: [], notMet: [], notOnSheet: [] };
+  const vals = (cs, k) => [...new Set(cs.map(c => fmt(c[k]).trim()).filter(v => v !== ""))].join(" | ");
+  const sheetCols = (cs, why) => [vals(cs, "carton"), vals(cs, "I"), vals(cs, "P"), vals(cs, "R"), vals(cs, "src"), why];
   for (const r of rows) {
     const b = (r[bi] || "").trim();
     const cands = sources.flatMap(s => s.map.get(b) || []);
-    if (!cands.length) { stats.notOnSheet++; continue; }
+    if (!cands.length) { stats.notOnSheet++; lists.notOnSheet.push(r); lists.total.push(r.concat(["Not on any sheet tab"])); continue; }
     const hits = cands.filter(c => tick(c.I) && nb(c.P));
-    if (!hits.length) { stats.notMet++; continue; }
-    if (hits.some(c => nb(c.R))) { stats.returned++; continue; }
-    stats.match++;
+    if (!hits.length) {
+      stats.notMet++;
+      const carton = cands.some(c => tick(c.I)), foil = cands.some(c => nb(c.P));
+      const why = !carton && !foil ? "Carton not sent and foil not issued" : !carton ? "Carton not sent" : !foil ? "Foil not issued" : "Carton sent and foil issued are on different rows of the sheet";
+      lists.notMet.push(r.concat(sheetCols(cands, why))); lists.total.push(r.concat(["Not matched: " + why])); continue;
+    }
+    if (hits.some(c => nb(c.R))) { stats.returned++; lists.returned.push(r.concat(sheetCols(hits, "Foil qty returned is filled"))); lists.total.push(r.concat(["Dropped: foil qty returned is filled"])); continue; }
+    stats.match++; lists.total.push(r.concat(["Matched"]));
     const uniq = a => [...new Set(a)];
     const Is = uniq(hits.map(h => fmt(h.I))).join(" | ");
     const Ps = uniq(hits.map(h => fmt(h.P))).join(" | ");
@@ -242,7 +254,10 @@ function match(hdr, rows, batchCol, sources) {
     if (fl.length) flags.push({ batch: b, brand: (r[bri] || "").trim(), issued: Ps, note: fl.join("; ") });
     out.push(r.concat([uniq(hits.map(h => fmt(h.carton))).join(" | "), Is, Ps, "", src, fl.join("; ")]));
   }
-  return { rows: [hdr.concat(APPENDED)].concat(out), stats, flags };
+  const dropHdr = hdr.concat(APPENDED.slice(0, 4), ["Found On", "Reason"]);
+  lists.total = [hdr.concat(["Result"])].concat(lists.total); lists.returned = [dropHdr].concat(lists.returned);
+  lists.notMet = [dropHdr].concat(lists.notMet); lists.notOnSheet = [hdr].concat(lists.notOnSheet);
+  return { rows: [hdr.concat(APPENDED)].concat(out), stats, flags, lists };
 }
 
 // ---------- UI ----------
@@ -332,14 +347,28 @@ async function run() {
   }
 
   let html = "<table><tr><th></th>" + results.map(r => "<th>" + r.label + "</th>").join("") + "</tr>";
-  const line = (lbl, f, cls) => "<tr><td>" + lbl + "</td>" + results.map(r => '<td class="n ' + (cls||"") + '">' + f(r) + "</td>").join("") + "</tr>";
-  html += line("Pending batches in file", r => r.total);
-  html += line("<b>Matched</b>", r => r.stats.match, "big");
-  html += line("Dropped: foil qty returned is filled", r => r.stats.returned);
-  html += line("On sheet, but carton or foil condition not met", r => r.stats.notMet);
-  html += line("Not on any sheet tab", r => r.stats.notOnSheet);
-  html += "</table>";
+  // Every number is a button: clicking it saves the list of batches (with brand names) behind that number.
+  const U = l => l.toUpperCase() + " - ";
+  const LISTS = {
+    total:      r => ({ file: U(r.label) + "All pending with result " + day + ".csv", rows: r.lists.total }),
+    match:      r => ({ file: r.file, rows: r.rows }),
+    returned:   r => ({ file: U(r.label) + "Dropped foil returned " + day + ".csv", rows: r.lists.returned }),
+    notMet:     r => ({ file: U(r.label) + "Carton or foil not met " + day + ".csv", rows: r.lists.notMet }),
+    notOnSheet: r => ({ file: U(r.label) + "Not on sheet " + day + ".csv", rows: r.lists.notOnSheet })
+  };
+  window.lastLists = {};
+  const line = (lbl, key, cls) => "<tr><td>" + lbl + "</td>" + results.map((r, i) => {
+    const L = LISTS[key](r), n = L.rows.length - 1, id = i + ":" + key; window.lastLists[r.label.toLowerCase() + ":" + key] = L;
+    return '<td class="n ' + (cls || "") + '">' + (n ? '<button class="numdl" data-list="' + id + '" title="Download this list: ' + esc(L.file) + '">' + n + "</button>" : "0") + "</td>";
+  }).join("") + "</tr>";
+  html += line("Pending batches in file", "total");
+  html += line("<b>Matched</b>", "match", "big");
+  html += line("Dropped: foil qty returned is filled", "returned");
+  html += line("On sheet, but carton or foil condition not met", "notMet");
+  html += line("Not on any sheet tab", "notOnSheet");
+  html += '</table><div class="hint">Point at any number and click it to download the list of batches and brands behind it.</div>';
   $("summary").innerHTML = html;
+  $("summary").onclick = e => { const b = e.target.closest("button.numdl"); if (!b) return; const [i, key] = b.dataset.list.split(":"), L = LISTS[key](results[+i]); download(L.file, toCSV(L.rows)); };
 
   $("downloads").innerHTML = "";
   window.lastOutputs = {};
