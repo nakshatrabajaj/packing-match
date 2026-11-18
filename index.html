@@ -875,11 +875,12 @@ function readTemplate(buf) {
   const L = { machines: list("Machines"), parts: list("Parts"), foil: list("CF_foilSize"), size: list("CF_tabletSize"), pack: list("CF_packagingType") };
   if (!L.machines.length || !L.parts.length) throw new Error("the machine or product list inside this template is empty. Download a fresh template from the IoT software");
   const meta = wb.Sheets["Meta"] && wb.Sheets["Meta"].A1 ? String(wb.Sheets["Meta"].A1.v).split("|") : WO_KEYS;
-  const cols = {}; for (const k of ["machine", "woNumber", "part", "quantity", "cf:foilSize", "cf:tabletSize", "cf:packagingType", "remarks"]) cols[k] = meta.indexOf(k);
+  const cols = {}; for (const k of ["machine", "woNumber", "part", "startTime", "stopTime", "quantity", "cf:foilSize", "cf:tabletSize", "cf:packagingType", "remarks"]) cols[k] = meta.indexOf(k);
   if (cols.machine < 0 || cols.part < 0 || cols.quantity < 0) throw new Error("this template has a layout the tool does not know (machine, product or quantity column missing)");
   let hdrRow = 0; for (let R = 0; R < 12 && !hdrRow; R++) { const c = ws[XLSX.utils.encode_cell({ r: R, c: cols.machine })]; if (c && /^machine/i.test(String(c.v).trim())) hdrRow = R + 1; }
   if (!hdrRow) throw new Error('the "Work Orders" sheet has no Machine heading');
-  const T = { L, cols, hdrRow, partSp: new Map(), partN: new Map(), partKz: new Map(), partPack: new Map(), partKeys: [] };
+  // Newer templates have their own Planned Start Time and Planned Stop Time columns. Older ones do not, and the times go in Remarks.
+  const T = { L, cols, hdrRow, times: cols.startTime >= 0 && cols.stopTime >= 0, partSp: new Map(), partN: new Map(), partKz: new Map(), partPack: new Map(), partKeys: [] };
   const push = (m, k, v) => { const a = m.get(k); if (!a) m.set(k, [v]); else if (!a.includes(v)) a.push(v); };
   for (const p of L.parts) {
     const s = sp(p); if (!T.partSp.has(s)) T.partSp.set(s, p); T.partN.set(s, (T.partN.get(s) || 0) + 1);
@@ -913,6 +914,8 @@ function machineFor(name, T) {
   const k = kz(name.replace(/^ALU /, "ALU ALU "));
   return T.L.machines.find(x => kz(x.split("—")[0]) === k) || T.L.machines.find(x => kz(x) === k) || "";
 }
+// Plan minutes (counted from 1 Jan 1970 on the wall clock) -> the day number Excel keeps for a date and time.
+const xlSerial = min => min / 1440 + 25569;
 // One row per planned batch, machine by machine in running order.
 function workOrderRows(plan, T) {
   const rows = [], st = { rows: 0, exact: 0, near: 0, missing: 0, checks: 0 };
@@ -928,8 +931,8 @@ function workOrderRows(plan, T) {
       if (!foil && kz(it.foil)) checks.push("Foil size " + sp(it.foil) + " is not in the IoT list, left blank");
       if (!size && kz(it.size)) checks.push("Size " + sp(it.size) + " is not in the IoT list, left blank");
       if (!it.qty) checks.push("Quantity is missing");
-      const remarks = ["Seq " + it.seq, it.start ? "Start " + it.start : "Time not given", it.start ? "End " + it.end : "", it.start ? "Run time " + hrs(it.min) : "", PART_LABEL[it.part], it.changeover === "CHANGEOVER" || it.changeover === "First set-up" ? it.changeover + " before this batch" : ""].filter(Boolean).join(" | ");
-      rows.push({ machine: mach || m.name, mname: m.name, batch: it.batch, fms: sp(it.brand), product: pm.name || String(it.brand).trim(), how: pm.how, qty: it.qty, foil, size, pack, remarks, checks });
+      const remarks = ["Seq " + it.seq, it.start ? (T.times ? "" : "Start " + it.start) : "Time not given", it.start && !T.times ? "End " + it.end : "", it.start ? "Run time " + hrs(it.min) : "", PART_LABEL[it.part], it.changeover === "CHANGEOVER" || it.changeover === "First set-up" ? it.changeover + " before this batch" : ""].filter(Boolean).join(" | ");
+      rows.push({ machine: mach || m.name, mname: m.name, batch: it.batch, fms: sp(it.brand), product: pm.name || String(it.brand).trim(), how: pm.how, start: it.start ? xlSerial(it.startMin) : "", stop: it.start ? xlSerial(it.endMin) : "", qty: it.qty, foil, size, pack, remarks, checks });
       st.rows++; st[pm.how === "exact" ? "exact" : pm.how ? "near" : "missing"]++; if (checks.length) st.checks++;
     }
   }
@@ -945,7 +948,7 @@ async function fillTemplate(buf, T, rows) {
   const sheetTag = ((await txt("xl/workbook.xml")).match(/<sheet\b[^>]*>/g) || []).find(t => attr(t, "name") === "Work Orders");
   const rels = (await txt("xl/_rels/workbook.xml.rels")).match(/<Relationship\b[^>]*>/g) || [];
   const target = t => t.startsWith("/") ? t.slice(1) : "xl/" + t;
-  const sheetRel = sheetTag && rels.find(r => attr(r, "Id") === attr(sheetTag, "r:id")), sstRel = rels.find(r => /\/sharedStrings$/.test(attr(r, "Type")));
+  const sheetRel = sheetTag && rels.find(r => attr(r, "Id") === attr(sheetTag, "r:id")), sstRel = rels.find(r => /\/sharedStrings$/.test(attr(r, "Type"))), styRel = rels.find(r => /\/styles$/.test(attr(r, "Type")));
   if (!sheetRel || !sstRel) throw new Error("template layout not recognised");
   const sheetPath = target(attr(sheetRel, "Target")), sstPath = target(attr(sstRel, "Target"));
   let sst = await txt(sstPath), xml = await txt(sheetPath);
@@ -953,19 +956,38 @@ async function fillTemplate(buf, T, rows) {
   const have = new Map(), items = sst.match(/<si\/>|<si>[\s\S]*?<\/si>/g) || [], added = []; let used = 0;
   items.forEach((x, i) => { const m = x.match(/^<si><t(?:\s[^>]*)?>([\s\S]*?)<\/t><\/si>$/); if (m) { const v = xmlUn(m[1]); if (!have.has(v)) have.set(v, i); } });
   const sidx = v => { used++; if (!have.has(v)) { have.set(v, items.length + added.length); added.push('<si><t xml:space="preserve">' + xmlEsc(v) + "</t></si>"); } return have.get(v); };
-  const c = T.cols, order = [["machine", "machine"], ["woNumber", "batch"], ["part", "product"], ["quantity", "qty"], ["cf:foilSize", "foil"], ["cf:tabletSize", "size"], ["cf:packagingType", "pack"], ["remarks", "remarks"]].filter(x => c[x[0]] >= 0).sort((a, b) => c[a[0]] - c[b[0]]);
+  // Start and stop are real date-and-time cells. They take the date format the template gives its own blank cells in
+  // those columns. If a template has none, a date format is added to the workbook's style table.
+  const c = T.cols, dstyle = {};
+  if (T.times) for (const k of ["startTime", "stopTime"]) {
+    const m = xml.match(new RegExp('<c r="' + XLSX.utils.encode_col(c[k]) + (T.hdrRow + 1) + '"[^>]*?\\ss="(\\d+)"'));
+    if (m) dstyle[k] = m[1];
+    else {
+      if (dstyle.added == null) {
+        const styPath = styRel && target(attr(styRel, "Target")); let sty = styPath ? await txt(styPath) : "";
+        const xf = sty.match(/<cellXfs\b[^>]*count="(\d+)"[^>]*>[\s\S]*?<\/cellXfs>/); if (!xf) throw new Error("template has no date format for the start and stop columns");
+        sty = sty.replace(xf[0], () => xf[0].replace(/count="\d+"/, 'count="' + (+xf[1] + 1) + '"').replace("</cellXfs>", '<xf numFmtId="22" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'));
+        zip.file(styPath, sty); dstyle.added = xf[1];
+      }
+      dstyle[k] = dstyle.added;
+    }
+  }
+  const order = [["machine", "machine"], ["woNumber", "batch"], ["part", "product"], ["startTime", "start"], ["stopTime", "stop"], ["quantity", "qty"], ["cf:foilSize", "foil"], ["cf:tabletSize", "size"], ["cf:packagingType", "pack"], ["remarks", "remarks"]].filter(x => c[x[0]] >= 0).sort((a, b) => c[a[0]] - c[b[0]]);
   const first = T.hdrRow + 1, last = T.hdrRow + rows.length;
   const rowXml = rows.map((r, i) => {
     const R = first + i; let cells = "";
     for (const [k, f] of order) {
-      const v = r[f], ref = XLSX.utils.encode_col(c[k]) + R; if (v === "" || v == null) continue;
+      const v = r[f], ref = XLSX.utils.encode_col(c[k]) + R;
+      if (f === "start" || f === "stop") { if (T.times) cells += '<c r="' + ref + '" s="' + dstyle[k] + '"' + (v === "" ? "/>" : "><v>" + v + "</v></c>"); continue; }
+      if (v === "" || v == null) continue;
       cells += f === "qty" ? '<c r="' + ref + '"><v>' + Number(v) + "</v></c>" : '<c r="' + ref + '" t="s"><v>' + sidx(String(v)) + "</v></c>";
     }
     return '<row r="' + R + '">' + cells + "</row>";
   }).join("");
   const sd = xml.match(/<sheetData>([\s\S]*?)<\/sheetData>/); if (!sd) throw new Error("template sheet is empty");
-  const keep = (sd[1].match(/<row\b[^>]*?\/>|<row\b[^>]*>[\s\S]*?<\/row>/g) || []).filter(r => +attr(r.match(/<row\b[^>]*>/)[0], "r") <= T.hdrRow).join("");
-  xml = xml.replace(sd[0], () => "<sheetData>" + keep + rowXml + "</sheetData>");
+  const tplRows = (sd[1].match(/<row\b[^>]*?\/>|<row\b[^>]*>[\s\S]*?<\/row>/g) || []).map(r => [+attr(r.match(/<row\b[^>]*>/)[0], "r"), r]);
+  const keep = tplRows.filter(r => r[0] <= T.hdrRow).map(r => r[1]).join(""), below = tplRows.filter(r => r[0] > last).map(r => r[1]).join("");   // blank rows under the plan stay as the template has them
+  xml = xml.replace(sd[0], () => "<sheetData>" + keep + rowXml + below + "</sheetData>");
   // The dropdowns and the sheet size stretch when the plan is longer than the blank rows of the template.
   xml = xml.replace(/sqref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/g, (m, a, r1, b, r2) => +r2 < last ? 'sqref="' + a + r1 + ":" + b + last + '"' : m);
   xml = xml.replace(/<dimension ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\/>/, (m, a, r1, b, r2) => '<dimension ref="' + a + r1 + ":" + b + Math.max(+r2, last) + '"/>');
@@ -984,11 +1006,11 @@ function saveBlob(name, blob) { const a = document.createElement("a"); a.href = 
 function renderWO() {
   const el = $("woOut"); if (!el) return;
   const plan = window.lastPlan, fname = "PLANNED WORK ORDERS " + stamp() + ".xlsx";
-  let h = '<div class="schedBox"><b>IoT work orders file</b><div class="hint" style="margin-top:2px">The same plan in the upload format of the IoT software: one row per batch with machine, batch number, product, quantity, foil size, size and pack type. The planned start, end and run time of each batch go in Remarks.</div>';
+  let h = '<div class="schedBox"><b>IoT work orders file</b><div class="hint" style="margin-top:2px">The same plan in the upload format of the IoT software: one row per batch with machine, batch number, product, quantity, foil size, size and pack type. ' + (woTpl && !woTpl.T.times ? "The planned start, end and run time of each batch go in Remarks." : "The planned start and stop of each batch go in the Planned Start Time and Planned Stop Time columns. The run time, sequence and change part go in Remarks.") + "</div>";
   if (woErr) h += '<div class="status"><span class="err">' + esc(woErr) + "</span></div>";
   if (!woTpl) h += '<div class="status">Add the planned work orders template downloaded from the IoT software. It is remembered on this computer.</div><button class="dl" id="woPick">Add template file</button>';
   else {
-    h += '<div class="hint">Template in use: <b>' + esc(woTpl.name) + "</b>, added " + esc(woTpl.savedAt) + ", " + fmtN(woTpl.T.L.parts.length) + " products and " + woTpl.T.L.machines.length + ' machines. Download a fresh one from the IoT software when new products are added there.</div><button class="dl" id="woPick">Replace template file</button>';
+    h += '<div class="hint">Template in use: <b>' + esc(woTpl.name) + "</b>, added " + esc(woTpl.savedAt) + ", " + fmtN(woTpl.T.L.parts.length) + " products and " + woTpl.T.L.machines.length + ' machines. Download a fresh one from the IoT software when new products are added there.</div>' + (woTpl.T.times ? "" : '<div class="status"><span class="err">This is the older template without the Planned Start Time and Planned Stop Time columns. Download the new template from the IoT software and click Replace template file.</span></div>') + '<button class="dl" id="woPick">Replace template file</button>';
     if (plan && plan.allotted) {
       const wo = workOrderRows(plan, woTpl.T); window.lastWO = wo;
       h += '<button class="dl" id="woDl">Download ' + fname + '</button><div class="hint">' + wo.st.rows + " rows. Product names: " + wo.st.exact + " exact, " + wo.st.near + " matched by close spelling, " + wo.st.missing + " not in the IoT product list.</div>";
